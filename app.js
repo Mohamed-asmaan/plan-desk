@@ -2118,8 +2118,9 @@ const PLANT_PIXELS = [
 
   const BOARD_KEY = "gsoc-study-board";
   const BOARD_INKS = { ink: "#2c2824", sage: "#3d6b52", seal: "#9d4a3c", gold: "#c4963a" };
-  let boardInk = "ink";
-  let boardErase = false;
+  const BOARD_PEN_LABEL = { ink: "Black pen", sage: "Green pen", seal: "Red pen", gold: "Marker" };
+  const BOARD_LIMIT = 8;
+  const STROKE_LIMIT = 400;
   let boardObserver = null;
 
   function stopBoard() {
@@ -2129,65 +2130,117 @@ const PLANT_PIXELS = [
     }
   }
 
-  function loadBoard() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(BOARD_KEY) || "[]");
-      if (!Array.isArray(raw)) return [];
-      return raw.filter((stroke) => stroke && Array.isArray(stroke.points) && stroke.points.length).slice(-400);
-    } catch (e) { return []; }
+  function boardId() {
+    return Math.random().toString(36).slice(2, 10);
   }
 
-  function saveBoard(strokes) {
-    try { localStorage.setItem(BOARD_KEY, JSON.stringify(strokes.slice(-400))); } catch (e) { /* keep the drawing for this visit */ }
+  function defaultPens() {
+    return [
+      { ink: "ink", w: 2.5 },
+      { ink: "sage", w: 3.5 },
+      { ink: "seal", w: 5 },
+      { ink: "gold", w: 16, soft: true }
+    ];
+  }
+
+  function cleanStroke(stroke) {
+    if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) return null;
+    const points = stroke.points.filter((pt) => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
+    if (!points.length) return null;
+    const ink = BOARD_INKS[stroke.ink] ? stroke.ink : "ink";
+    const w = Number(stroke.w);
+    return {
+      ink,
+      erase: !!stroke.erase,
+      soft: !!stroke.soft && !stroke.erase,
+      w: Number.isFinite(w) ? Math.min(32, Math.max(1, w)) : (stroke.erase ? 22 : 2.6),
+      points: points.slice(-2000)
+    };
+  }
+
+  function cleanBoard(board, index) {
+    const strokes = Array.isArray(board && board.strokes) ? board.strokes.map(cleanStroke).filter(Boolean).slice(-STROKE_LIMIT) : [];
+    return {
+      id: board && typeof board.id === "string" && board.id ? board.id : boardId(),
+      name: board && typeof board.name === "string" && board.name.trim() ? board.name.trim().slice(0, 40) : "Board " + (index + 1),
+      strokes
+    };
+  }
+
+  function loadBoard() {
+    const blank = () => ({ active: "board", pen: 0, erase: false, eraseW: 22, pens: defaultPens(), boards: [{ id: "board", name: "Board", strokes: [] }] });
+    try {
+      const raw = JSON.parse(localStorage.getItem(BOARD_KEY) || "null");
+      if (Array.isArray(raw)) {
+        const doc = blank();
+        doc.boards[0].strokes = raw.map(cleanStroke).filter(Boolean).slice(-STROKE_LIMIT);
+        return doc;
+      }
+      if (!raw || typeof raw !== "object" || !Array.isArray(raw.boards)) return blank();
+      const boards = raw.boards.slice(0, BOARD_LIMIT).map(cleanBoard);
+      if (!boards.length) return blank();
+      const pens = defaultPens();
+      if (Array.isArray(raw.pens)) {
+        raw.pens.slice(0, pens.length).forEach((pen, i) => {
+          if (!pen || !BOARD_INKS[pen.ink]) return;
+          const w = Number(pen.w);
+          pens[i] = { ink: pen.ink, w: Number.isFinite(w) ? Math.min(32, Math.max(1, w)) : pens[i].w, soft: !!pen.soft };
+        });
+      }
+      const active = boards.some((board) => board.id === raw.active) ? raw.active : boards[0].id;
+      const eraseW = Number(raw.eraseW);
+      return {
+        active,
+        pen: Math.min(pens.length - 1, Math.max(0, Number(raw.pen) || 0)),
+        erase: !!raw.erase,
+        eraseW: Number.isFinite(eraseW) ? Math.min(48, Math.max(4, eraseW)) : 22,
+        pens,
+        boards
+      };
+    } catch (e) { return blank(); }
+  }
+
+  function saveBoard(doc) {
+    const copy = {
+      active: doc.active,
+      pen: doc.pen,
+      erase: doc.erase,
+      eraseW: doc.eraseW,
+      pens: doc.pens,
+      boards: doc.boards.map((board) => ({ id: board.id, name: board.name, strokes: board.strokes.slice(-STROKE_LIMIT) }))
+    };
+    try { localStorage.setItem(BOARD_KEY, JSON.stringify(copy)); } catch (e) { /* keep the drawing for this visit */ }
+  }
+
+  function penSvg() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const body = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    body.setAttribute("d", "M14.2 3.6a1.6 1.6 0 0 1 2.3 0l3.9 3.9a1.6 1.6 0 0 1 0 2.3L9.2 21H3v-6.2L14.2 3.6z");
+    body.setAttribute("fill", "currentColor");
+    const nib = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    nib.setAttribute("d", "M3 21l2.4-.6L8.6 16 3 21z");
+    nib.setAttribute("fill", "currentColor");
+    svg.append(body, nib);
+    return svg;
   }
 
   function renderBoard() {
     stopBoard();
-    const strokes = loadBoard();
+    const doc = loadBoard();
+    doc.boards.forEach((board) => { board.redo = []; });
     const canvas = el("canvas", { "aria-label": "Whiteboard. Draw with a finger or the mouse." });
-    const eraser = el("button", { type: "button", class: "btn btn-ghost mini", "aria-pressed": "false" }, "Eraser");
-    const clear = el("button", { type: "button", class: "btn btn-ghost mini board-clear" }, "Clear");
-    const colors = Object.keys(BOARD_INKS).map((name) => el("button", {
-      type: "button",
-      class: "ink-dot",
-      dataset: { ink: name },
-      "aria-label": name === "ink" ? "Black" : name[0].toUpperCase() + name.slice(1),
-      "aria-pressed": String(name === boardInk && !boardErase),
-      style: "background:" + BOARD_INKS[name]
-    }));
-    const wrap = el("section", { class: "whiteboard" }, [
-      el("div", { class: "board-tools", role: "toolbar", "aria-label": "Drawing tools" }, [
-        ...colors,
-        eraser,
-        clear
-      ]),
-      canvas
-    ]);
+    const bar = el("div", { class: "board-bar", role: "tablist", "aria-label": "Boards" });
+    const tools = el("div", { class: "board-tools", role: "toolbar", "aria-label": "Drawing tools" });
+    const wrap = el("section", { class: "whiteboard" }, [bar, tools, canvas]);
 
-    function markTools() {
-      colors.forEach((btn) => btn.setAttribute("aria-pressed", String(!boardErase && btn.dataset.ink === boardInk)));
-      eraser.setAttribute("aria-pressed", String(boardErase));
+    function current() {
+      return doc.boards.find((board) => board.id === doc.active) || doc.boards[0];
     }
-    colors.forEach((btn) => btn.addEventListener("click", () => {
-      boardInk = btn.dataset.ink;
-      boardErase = false;
-      markTools();
-    }));
-    eraser.addEventListener("click", () => {
-      boardErase = true;
-      markTools();
-    });
-    clear.addEventListener("click", () => {
-      if (!strokes.length) return;
-      if (!window.confirm("Clear the whiteboard on this device?")) return;
-      strokes.length = 0;
-      saveBoard(strokes);
-      paint();
-    });
-
-    let drawing = null;
 
     function paint() {
+      const strokes = current().strokes;
       const ctx = canvas.getContext("2d");
       const width = canvas.width;
       const height = canvas.height;
@@ -2199,9 +2252,10 @@ const PLANT_PIXELS = [
       ctx.lineJoin = "round";
       for (const stroke of strokes) {
         ctx.beginPath();
+        ctx.globalAlpha = stroke.soft ? 0.45 : 1;
         ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
         ctx.strokeStyle = BOARD_INKS[stroke.ink] || BOARD_INKS.ink;
-        ctx.lineWidth = (stroke.erase ? 22 : 2.6) * scale;
+        ctx.lineWidth = (stroke.w || (stroke.erase ? 22 : 2.6)) * scale;
         stroke.points.forEach((pt, index) => {
           const x = pt[0] * width;
           const y = pt[1] * height;
@@ -2211,8 +2265,163 @@ const PLANT_PIXELS = [
         if (stroke.points.length === 1) ctx.lineTo(stroke.points[0][0] * width + 0.01, stroke.points[0][1] * height);
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
     }
+
+    const widthInput = el("input", { type: "range", min: "1", max: "32", step: "0.5" });
+    const widthLabel = el("span", { class: "pen-width-value" }, "");
+    const undoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Undo" }, "Undo");
+    const redoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Redo" }, "Redo");
+    const clearBtn = el("button", { type: "button", class: "btn btn-ghost mini" }, "Clear");
+    const penButtons = doc.pens.map((pen, index) => {
+      const btn = el("button", {
+        type: "button",
+        class: "pen-tool" + (pen.soft ? " is-marker" : ""),
+        "aria-label": BOARD_PEN_LABEL[pen.ink] || "Pen",
+        style: "color:" + BOARD_INKS[pen.ink]
+      }, penSvg());
+      btn.addEventListener("click", () => {
+        doc.pen = index;
+        doc.erase = false;
+        saveBoard(doc);
+        drawTools();
+      });
+      return btn;
+    });
+    const eraser = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Eraser" }, "Eraser");
+    eraser.addEventListener("click", () => {
+      doc.erase = true;
+      saveBoard(doc);
+      drawTools();
+    });
+
+    function toolWidth() {
+      return doc.erase ? doc.eraseW : doc.pens[doc.pen].w;
+    }
+
+    function drawTools() {
+      const board = current();
+      penButtons.forEach((btn, index) => btn.setAttribute("aria-pressed", String(!doc.erase && doc.pen === index)));
+      eraser.setAttribute("aria-pressed", String(doc.erase));
+      widthInput.value = String(toolWidth());
+      widthInput.setAttribute("aria-label", doc.erase ? "Eraser width" : "Pen width");
+      widthLabel.textContent = String(Math.round(toolWidth()));
+      undoBtn.disabled = !board.strokes.length;
+      redoBtn.disabled = !board.redo.length;
+      canvas.style.cursor = doc.erase ? "cell" : "crosshair";
+    }
+
+    widthInput.addEventListener("input", () => {
+      const next = Number(widthInput.value);
+      if (doc.erase) doc.eraseW = next;
+      else doc.pens[doc.pen].w = next;
+      widthLabel.textContent = String(Math.round(next));
+      saveBoard(doc);
+    });
+    undoBtn.addEventListener("click", () => {
+      const board = current();
+      const stroke = board.strokes.pop();
+      if (!stroke) return;
+      board.redo.push(stroke);
+      saveBoard(doc);
+      drawTools();
+      paint();
+    });
+    redoBtn.addEventListener("click", () => {
+      const board = current();
+      const stroke = board.redo.pop();
+      if (!stroke) return;
+      board.strokes.push(stroke);
+      saveBoard(doc);
+      drawTools();
+      paint();
+    });
+    clearBtn.addEventListener("click", () => {
+      const board = current();
+      if (!board.strokes.length) return;
+      if (!window.confirm("Clear this board on this device?")) return;
+      board.redo = board.strokes.slice();
+      board.strokes = [];
+      saveBoard(doc);
+      drawTools();
+      paint();
+    });
+
+    tools.append(
+      ...penButtons,
+      eraser,
+      el("label", { class: "pen-width" }, [widthLabel, widthInput]),
+      undoBtn,
+      redoBtn,
+      clearBtn
+    );
+
+    function drawBar() {
+      bar.replaceChildren();
+      doc.boards.forEach((board) => {
+        if (board.id === doc.active) {
+          const name = el("input", {
+            class: "board-name",
+            type: "text",
+            value: board.name,
+            maxlength: "40",
+            "aria-label": "Board name"
+          });
+          name.addEventListener("change", () => {
+            const next = name.value.trim().slice(0, 40);
+            board.name = next || board.name;
+            name.value = board.name;
+            saveBoard(doc);
+          });
+          bar.append(name);
+          return;
+        }
+        const chip = el("button", {
+          type: "button",
+          class: "board-chip",
+          role: "tab",
+          "aria-selected": "false"
+        }, board.name);
+        chip.addEventListener("click", () => {
+          doc.active = board.id;
+          saveBoard(doc);
+          drawBar();
+          drawTools();
+          paint();
+        });
+        bar.append(chip);
+      });
+      const add = el("button", { type: "button", class: "board-chip", "aria-label": "New board" }, "New");
+      add.addEventListener("click", () => {
+        if (doc.boards.length >= BOARD_LIMIT) {
+          toast("Eight boards is the limit on this device.");
+          return;
+        }
+        const board = { id: boardId(), name: "Board " + (doc.boards.length + 1), strokes: [], redo: [] };
+        doc.boards.push(board);
+        doc.active = board.id;
+        saveBoard(doc);
+        drawBar();
+        drawTools();
+        paint();
+      });
+      const remove = el("button", { type: "button", class: "board-chip", "aria-label": "Delete this board", disabled: doc.boards.length < 2 }, "Delete");
+      remove.addEventListener("click", () => {
+        if (doc.boards.length < 2) return;
+        const board = current();
+        if (!window.confirm("Delete " + board.name + " on this device?")) return;
+        doc.boards = doc.boards.filter((item) => item.id !== board.id);
+        doc.active = doc.boards[0].id;
+        saveBoard(doc);
+        drawBar();
+        drawTools();
+        paint();
+      });
+      bar.append(add, remove);
+    }
+
+    let drawing = null;
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
@@ -2239,8 +2448,18 @@ const PLANT_PIXELS = [
       if (event.button !== 0) return;
       event.preventDefault();
       try { canvas.setPointerCapture(event.pointerId); } catch (e) { /* keep the stroke without capture */ }
-      drawing = { ink: boardInk, erase: boardErase, points: [at(event)] };
-      strokes.push(drawing);
+      const pen = doc.pens[doc.pen];
+      const board = current();
+      board.redo = [];
+      drawing = {
+        ink: pen.ink,
+        erase: doc.erase,
+        soft: !doc.erase && !!pen.soft,
+        w: toolWidth(),
+        points: [at(event)]
+      };
+      board.strokes.push(drawing);
+      if (board.strokes.length > STROKE_LIMIT) board.strokes.splice(0, board.strokes.length - STROKE_LIMIT);
       paint();
     });
     canvas.addEventListener("pointermove", (event) => {
@@ -2256,11 +2475,14 @@ const PLANT_PIXELS = [
     function finish() {
       if (!drawing) return;
       drawing = null;
-      saveBoard(strokes);
+      saveBoard(doc);
+      drawTools();
     }
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", finish);
 
+    drawBar();
+    drawTools();
     boardObserver = new ResizeObserver(resize);
     boardObserver.observe(canvas);
     requestAnimationFrame(resize);

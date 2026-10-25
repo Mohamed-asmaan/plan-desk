@@ -1,7 +1,7 @@
 /* Offline support for the plan desk. Network first, so a new deploy shows up
    on the next open; the cache answers only when there is no network. GitHub
    API calls (sync) and other origins are never cached. */
-const CACHE = "plan-desk-v1";
+const CACHE = "plan-desk-v2";
 const CORE = [
   "./",
   "./index.html",
