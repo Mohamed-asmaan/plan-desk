@@ -1,10 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { COLOR_LABEL, NOTE_COLORS, noteStamp, uid } from "./model.js";
 import { toast } from "./toast.jsx";
 
 /* Sticky notes. Each keeps when it was written and when it was last edited. */
 export default function Notes({ state, update }) {
   const focusId = useRef(null);
+  const [query, setQuery] = useState("");
+  const [tint, setTint] = useState("");
 
   useEffect(() => {
     if (!focusId.current) return;
@@ -17,6 +19,8 @@ export default function Notes({ state, update }) {
     const now = Date.now();
     const id = uid();
     focusId.current = id;
+    setQuery("");
+    setTint("");
     update((draft) => {
       draft.stickies.unshift({ id, text: "", color: "cream", createdAt: now, updatedAt: now });
       return draft;
@@ -48,11 +52,28 @@ export default function Notes({ state, update }) {
     }));
   }
 
+  const q = query.trim().toLowerCase();
+  const shown = state.stickies.filter((note) => (!tint || note.color === tint) && (!q || note.text.toLowerCase().includes(q)));
+
   return (
     <>
-      <h2>Notes</h2>
+      <div className="notes-head">
+        <div>
+          <h2>Notes</h2>
+          <p className="quiet">{state.stickies.length} {state.stickies.length === 1 ? "note" : "notes"}</p>
+        </div>
+        <div className="notes-tools">
+          <input type="search" className="notes-search" placeholder="Search notes" aria-label="Search notes" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className="colors notes-filter" role="group" aria-label="Filter by colour">
+            {NOTE_COLORS.map((color) => (
+              <button key={color} type="button" className={"sw-" + color} aria-label={"Only " + COLOR_LABEL[color]} aria-pressed={tint === color} onClick={() => setTint((v) => (v === color ? "" : color))} />
+            ))}
+          </div>
+          <button type="button" className="btn btn-primary" onClick={add}>New note</button>
+        </div>
+      </div>
       <div className="board">
-        {state.stickies.length ? state.stickies.map((note) => (
+        {shown.length ? shown.map((note) => (
           <article className={"note c-" + note.color} key={note.id}>
             <textarea
               id={"note-" + note.id}
@@ -79,9 +100,12 @@ export default function Notes({ state, update }) {
               <button type="button" className="btn-line" onClick={() => remove(note.id)}>Delete</button>
             </div>
           </article>
-        )) : <p className="quiet">Nothing here yet. Add a note for a thought, a blocker, or an idea.</p>}
+        )) : (
+          <p className="quiet notes-empty">
+            {state.stickies.length ? "No notes match." : "Nothing here yet. Add a note for a thought, a blocker, or an idea."}
+          </p>
+        )}
       </div>
-      <button type="button" className="dashed" onClick={add}>Add a note</button>
     </>
   );
 }

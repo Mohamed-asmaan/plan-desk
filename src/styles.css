@@ -1593,3 +1593,103 @@ textarea { min-height: 96px; resize: vertical; }
   .tick:checked { background: Highlight; }
   .btn-primary { border: 1px solid ButtonText; }
 }
+
+/* ---------- Polish: Notes, Focus, dashboard ---------- */
+
+/* Notes: toolbar plus a masonry board of paper cards. Tools fade in on
+   hover or focus so the board reads as notes, not controls. */
+.notes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.notes-head .quiet { margin-top: var(--space-1); font-size: var(--text-xs); }
+.notes-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.notes-search {
+  width: 220px;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+}
+.notes-filter button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface-raised), 0 0 0 4px var(--sage); }
+.notes-page .board {
+  display: block;
+  columns: 240px;
+  column-gap: var(--space-4);
+  margin-top: 0;
+}
+.notes-page .note {
+  break-inside: avoid;
+  margin-bottom: var(--space-4);
+  min-height: 160px;
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(44, 40, 36, 0.06);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 160ms ease, transform 160ms ease;
+}
+.notes-page .note:hover,
+.notes-page .note:focus-within { box-shadow: var(--shadow-raised); transform: translateY(-1px); }
+.notes-page .note textarea { font-size: var(--text-md); line-height: 1.5; field-sizing: content; min-height: 96px; }
+.notes-page .note-tools { opacity: 0.35; transition: opacity 160ms ease; }
+.notes-page .note:hover .note-tools,
+.notes-page .note:focus-within .note-tools { opacity: 1; }
+.notes-empty { column-span: all; padding: var(--space-10) 0; text-align: center; }
+@media (hover: none) { .notes-page .note-tools { opacity: 1; } }
+
+/* Focus: the time sits inside a progress ring on a raised card. */
+.focus-stage {
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.focus-stage h2 { text-align: left; }
+.focus-stage .modes { justify-content: center; }
+.focus-stage .stepper, .focus-stage .timer-actions { justify-content: center; }
+.focus-stage .link-card { text-align: left; margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--paper); }
+.timer-ring {
+  position: relative;
+  width: min(100%, 300px);
+  aspect-ratio: 1;
+  margin: var(--space-4) auto var(--space-6);
+}
+.timer-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: var(--paper-sunk); stroke-width: 5; }
+.ring-fill {
+  fill: none;
+  stroke: var(--sage);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 300ms linear;
+}
+.timer-ring.is-break .ring-fill { stroke: var(--gold); }
+.timer-ring.is-running .ring-fill { filter: drop-shadow(0 0 4px rgba(61, 107, 82, 0.35)); }
+.ring-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: var(--space-1);
+}
+.ring-face .phase { margin: 0; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; }
+.ring-face .time-left,
+.focus-page .ring-face .time-left { margin: 0; font-size: clamp(2.6rem, 11vw, 4rem); }
+
+/* Dashboard: gentle hover feedback, like a desktop app. */
+.tiles-summary .tile { transition: box-shadow 160ms ease, border-color 160ms ease; }
+.tiles-summary .tile:hover { border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
+.day-card:not(.is-current):hover { border-color: var(--line-strong); background: var(--surface); }
+.cell:not(.outside):not(.blank) { transition: transform 120ms ease, box-shadow 120ms ease; }
+.cell:not(.outside):not(.blank):hover { transform: translateY(-1px); box-shadow: inset 0 0 0 1.5px var(--sage); }
+.task { border-radius: var(--radius-sm); transition: background 120ms ease; }
+.task:hover { background: rgba(61, 107, 82, 0.04); }
+.bar-fill { background: linear-gradient(90deg, var(--sage), var(--level-3)); }
+@media (prefers-reduced-motion: reduce) {
+  .notes-page .note, .cell, .ring-fill { transition: none; }
+}

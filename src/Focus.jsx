@@ -1,4 +1,4 @@
-import { MONTHS_SHORT, WEEKDAYS, formatMs, fmtDur, hashForDay, pad, sessionActive, taskInfo, taskLoggedMs } from "./model.js";
+import { MONTHS_SHORT, WEEKDAYS, cappedElapsed, formatMs, fmtDur, hashForDay, pad, sessionActive, taskInfo, taskLoggedMs } from "./model.js";
 import { MAX_REMINDERS, addReminder, removeReminder, setReminderLabel, setReminderTime } from "./reminders.js";
 import {
   displayMs, pauseTimer, phaseLabel, resumeTimer, setBreakMin, setFocusMin, setMode,
@@ -110,6 +110,26 @@ function Reminders({ state, update }) {
   );
 }
 
+/* A ring that fills as the session runs: pomodoro by its length, the
+   stopwatch once around per minute. */
+function TimerRing({ state, children }) {
+  const timer = state.timer;
+  const ms = cappedElapsed(state);
+  const total = timer.mode === "stopwatch" ? 60000 : timer.durationMs || state.focusMin * 60000;
+  const p = timer.mode === "stopwatch" ? (ms % 60000) / 60000 : Math.min(1, ms / total);
+  const r = 46;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className={"timer-ring" + (timer.phase === "break" ? " is-break" : "") + (timer.running ? " is-running" : "")}>
+      <svg viewBox="0 0 100 100" aria-hidden="true">
+        <circle className="ring-track" cx="50" cy="50" r={r} />
+        <circle className="ring-fill" cx="50" cy="50" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - p)} />
+      </svg>
+      <div className="ring-face">{children}</div>
+    </div>
+  );
+}
+
 export default function Focus({ state, update }) {
   const timer = state.timer;
   useNow(250, timer.running);
@@ -126,8 +146,10 @@ export default function Focus({ state, update }) {
           <button type="button" aria-pressed={timer.mode === "pomodoro"} disabled={active} onClick={() => update((d) => setMode(d, "pomodoro"))}>Focus</button>
           <button type="button" aria-pressed={timer.mode === "stopwatch"} disabled={active} onClick={() => update((d) => setMode(d, "stopwatch"))}>Stopwatch</button>
         </div>
-        <p className="phase" aria-live="polite">{phaseLabel(state)}</p>
-        <p className="time-left" role="timer">{formatMs(displayMs(state))}</p>
+        <TimerRing state={state}>
+          <p className="phase" aria-live="polite">{phaseLabel(state)}</p>
+          <p className="time-left" role="timer">{formatMs(displayMs(state))}</p>
+        </TimerRing>
         {timer.phase === "break" && <p className="quiet">This break isn't added to your hours.</p>}
         {!active && timer.mode === "pomodoro" && (
           <>
