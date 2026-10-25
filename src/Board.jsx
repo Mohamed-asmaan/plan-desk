@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./board.css";
 import { Icon } from "./board/icons.jsx";
-import { COLORS, NOTE_BG, SIZES, TEXT_SIZE, NOTE_SIZE, load, save, uid, colorHex } from "./board/doc.js";
+import { COLORS, NOTE_BG, SIZES, STROKE, TEXT_SIZE, NOTE_SIZE, BOARD_LIMIT, WIDTH_MIN, WIDTH_MAX, readBoardDoc, saveDoc, blankBoard, uid, colorHex, clampWidth } from "./board/doc.js";
+import { BOARD_KEY } from "./model.js";
+import { scheduleSync } from "./sync.js";
+import { toast } from "./toast.jsx";
 import * as G from "./board/geometry.js";
 import { drawItem, drawItems, drawGrid, drawSelection, selectionBox } from "./board/render.js";
 
@@ -27,9 +30,12 @@ const TOOLS = [
 ];
 const TOOL_LIST = TOOLS.filter(Boolean);
 const TOOL_BY_KEY = Object.fromEntries(TOOL_LIST.map((t) => [t.key.toLowerCase(), t.id]));
-const PREF_KEY = { pen: "pen", highlighter: "highlighter", rect: "shape", ellipse: "shape", arrow: "shape", line: "shape", text: "text", note: "note" };
+const PREF_KEY = { pen: "pen", highlighter: "highlighter", rect: "shape", ellipse: "shape", arrow: "shape", line: "shape", text: "text", note: "note", eraser: "eraser" };
+const strokeKind = (it) => (it.type === "pen" || it.type === "highlighter" ? it.type : "shape");
+const hasStroke = (it) => it.type !== "text" && it.type !== "note";
+const quickFor = (kind, w) => Object.keys(STROKE[kind]).find((k) => STROKE[kind][k] === w) || null;
+const fmtWidth = (w) => (Number.isInteger(w) ? String(w) : w.toFixed(1));
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-const ERASE_R = 10;
 const NUDGE_MERGE_MS = 700;
 
 const SHORTCUTS = [
@@ -48,6 +54,11 @@ const SHORTCUTS = [
     ["Add to selection", ["Shift", "Click"]],
     ["Keep proportions, snap angles", ["Shift", "Drag"]],
     ["Deselect, back to Select", ["Esc"]]
+  ]],
+  ["Boards", [
+    ["Switch board", ["←"], ["→"]],
+    ["Rename board", ["F2"], ["Double-click"]],
+    ["Delete board", ["Delete"]]
   ]],
   ["View", [
     ["Pan", ["Space", "Drag"], ["Scroll"]],
@@ -102,10 +113,20 @@ function IconButton({ icon, label, keys, ariaKeys, side, className = "", btnRef,
 }
 
 export default function Board() {
-  const initial = useRef(null);
-  if (!initial.current) initial.current = load();
+  const meta = useRef(null);
+  const needsWrite = useRef(false);
+  if (!meta.current) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(BOARD_KEY) || "null");
+      needsWrite.current = !!raw && raw.v !== 3;
+    } catch (e) { needsWrite.current = false; }
+    meta.current = readBoardDoc();
+  }
+  const activeBoard = () => meta.current.boards.find((b) => b.id === meta.current.active) || meta.current.boards[0];
+  const histories = useRef(new Map());
   const doc = useRef(null);
-  if (!doc.current) doc.current = { items: initial.current.items, past: [], future: [] };
+  if (!doc.current) doc.current = { items: activeBoard().items, past: [], future: [] };
+  const dirty = useRef({ items: false, doc: false });
 
   const rootRef = useRef(null);
   const stageRef = useRef(null);
@@ -115,8 +136,8 @@ export default function Board() {
   const menuBtnRef = useRef(null);
   const menuRef = useRef(null);
 
-  const viewRef = useRef(initial.current.view || { x: 0, y: 0, z: 1 });
-  const needFit = useRef(!initial.current.view && initial.current.items.length > 0);
+  const viewRef = useRef(activeBoard().view || { x: 0, y: 0, z: 1 });
+  const needFit = useRef(!activeBoard().view && activeBoard().items.length > 0);
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   const colorsRef = useRef({ sage: "#3d6b52", white: "#ffffff", dot: "rgba(44,40,36,0.18)", paper: "#f7f4ee", muted: "#5e574e" });
   const drag = useRef(null);
@@ -136,19 +157,19 @@ export default function Board() {
   const toolRef = useRef("select");
   const [sel, setSel] = useState([]);
   const selRef = useRef([]);
-  const [prefs, setPrefs] = useState(initial.current.prefs);
-  const prefsRef = useRef(initial.current.prefs);
+  const [prefs, setPrefs] = useState(meta.current.prefs);
+  const prefsRef = useRef(meta.current.prefs);
   const [zoom, setZoom] = useState(viewRef.current.z);
   const [, setVersion] = useState(0);
   const [editing, setEditing] = useState(null);
   const [editText, setEditText] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [renaming, setRenaming] = useState(null);
   const [rove, setRove] = useState(0);
   const phone = useMedia("(max-width: 719px)");
-  const dialogRef = useRef({ help: false, confirm: false, menu: false });
-  dialogRef.current = { help: helpOpen, confirm: confirmOpen, menu: menuOpen };
+  const dialogRef = useRef({ help: false, menu: false });
+  dialogRef.current = { help: helpOpen, menu: menuOpen };
 
   const bump = () => setVersion((v) => v + 1);
 
@@ -157,12 +178,27 @@ export default function Board() {
     clearTimeout(saveTimer.current);
     saveTimer.current = 0;
     const v = viewRef.current;
-    save(doc.current.items, { x: r1(v.x), y: r1(v.y), z: Math.round(v.z * 1000) / 1000 }, prefsRef.current);
+    const m = meta.current;
+    const board = activeBoard();
+    board.items = doc.current.items;
+    board.view = { x: r1(v.x), y: r1(v.y), z: Math.round(v.z * 1000) / 1000 };
+    m.prefs = prefsRef.current;
+    const d = dirty.current;
+    if (d.items || d.doc) {
+      const now = Date.now();
+      if (d.items) board.updatedAt = now;
+      m.updatedAt = now;
+    }
+    saveDoc({ ...m, v: 3 });
+    if (d.items || d.doc) scheduleSync();
+    dirty.current = { items: false, doc: false };
   }
   function scheduleSave() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flushSave, 300);
   }
+
+  const eraseR = () => Math.max(2, (prefsRef.current.eraser?.width || 20) / 2);
 
   /* ---------- Painting ---------- */
   function selectedItems() {
@@ -207,7 +243,7 @@ export default function Board() {
     if (toolRef.current === "eraser" && hoverPt.current && !spaceRef.current) {
       const [x, y] = hoverPt.current;
       ctx.beginPath();
-      ctx.arc(x, y, ERASE_R, 0, Math.PI * 2);
+      ctx.arc(x, y, eraseR(), 0, Math.PI * 2);
       ctx.fillStyle = "rgba(255,255,255,0.6)";
       ctx.fill();
       ctx.strokeStyle = col.muted;
@@ -258,6 +294,7 @@ export default function Board() {
       d.future = [];
     }
     d.items = next;
+    dirty.current.items = true;
     const ids = new Set(next.map((i) => i.id));
     if (selRef.current.some((id) => !ids.has(id))) setSelection(selRef.current.filter((id) => ids.has(id)));
     scheduleSave();
@@ -307,17 +344,125 @@ export default function Board() {
     const z = viewRef.current.z;
     const items = doc.current.items;
     const next = items.map((it) => (ids.has(it.id) ? G.translate(it, dx / z, dy / z) : it));
+    applyMerged(next, "nudge");
+  }
+  /* Repeated small edits (nudges, slider drags) share one undo step. */
+  function applyMerged(next, kind) {
+    const items = doc.current.items;
     const now = performance.now();
-    const merge = lastNudge.current && lastNudge.current.items === items && now - lastNudge.current.t < NUDGE_MERGE_MS;
+    const last = lastNudge.current;
+    const merge = last && last.kind === kind && last.items === items && now - last.t < NUDGE_MERGE_MS;
     apply(next, merge ? undefined : items);
-    lastNudge.current = { t: now, items: next };
+    lastNudge.current = { kind, t: now, items: next };
   }
   function clearBoard() {
+    setMenuOpen(false);
+    commitEdit();
     const items = doc.current.items;
-    setConfirmOpen(false);
     if (!items.length) return;
+    const id = meta.current.active;
     setSelection([]);
     apply([], items);
+    toast("Board cleared.", () => {
+      if (!meta.current.boards.some((b) => b.id === id)) return;
+      switchBoard(id);
+      apply(items, doc.current.items);
+    });
+  }
+
+  /* ---------- Boards ---------- */
+  function loadActive() {
+    const b = activeBoard();
+    const h = histories.current.get(b.id) || { past: [], future: [] };
+    doc.current = { items: b.items, past: h.past, future: h.future };
+    drag.current = null;
+    lastNudge.current = null;
+    selRef.current = [];
+    setSel([]);
+    if (b.view) setView(b.view, true);
+    else if (b.items.length) zoomToFit(true);
+    else setView({ x: 0, y: 0, z: 1 }, true);
+    requestPaint();
+    bump();
+  }
+  function switchBoard(id) {
+    const m = meta.current;
+    if (!m.boards.some((b) => b.id === id) || id === m.active) return;
+    commitEdit();
+    if (drag.current) abortDrag();
+    flushSave();
+    histories.current.set(m.active, { past: doc.current.past, future: doc.current.future });
+    m.active = id;
+    loadActive();
+    flushSave();
+  }
+  function addBoard() {
+    const m = meta.current;
+    setMenuOpen(false);
+    if (m.boards.length >= BOARD_LIMIT) { toast("You can keep up to " + BOARD_LIMIT + " boards."); return; }
+    let n = m.boards.length + 1;
+    while (m.boards.some((b) => b.name === "Board " + n)) n++;
+    const b = blankBoard(n - 1);
+    b.name = "Board " + n;
+    b.updatedAt = Date.now();
+    m.boards.push(b);
+    dirty.current.doc = true;
+    switchBoard(b.id);
+  }
+  function renameBoard(id, name) {
+    setRenaming(null);
+    const b = meta.current.boards.find((x) => x.id === id);
+    const next = (name || "").trim().slice(0, 40);
+    if (!b || !next || next === b.name) return;
+    b.name = next;
+    b.updatedAt = Date.now();
+    dirty.current.doc = true;
+    flushSave();
+    bump();
+  }
+  function deleteBoard(id) {
+    const m = meta.current;
+    setMenuOpen(false);
+    if (m.boards.length <= 1) return;
+    commitEdit();
+    flushSave();
+    const index = m.boards.findIndex((b) => b.id === id);
+    if (index < 0) return;
+    const gone = m.boards[index];
+    const hist = id === m.active ? { past: doc.current.past, future: doc.current.future } : histories.current.get(id);
+    m.boards.splice(index, 1);
+    histories.current.delete(id);
+    dirty.current.doc = true;
+    if (id === m.active) {
+      m.active = m.boards[Math.min(index, m.boards.length - 1)].id;
+      loadActive();
+    }
+    flushSave();
+    bump();
+    toast("Board deleted.", () => {
+      const mm = meta.current;
+      if (mm.boards.some((b) => b.id === gone.id) || mm.boards.length >= BOARD_LIMIT) return;
+      mm.boards.splice(Math.min(index, mm.boards.length), 0, { ...gone, updatedAt: Date.now() });
+      if (hist) histories.current.set(gone.id, hist);
+      dirty.current.doc = true;
+      switchBoard(gone.id);
+      flushSave();
+      bump();
+    });
+  }
+  /* Sync wrote a merged doc: start over from storage, with no history. */
+  function reloadFromStorage() {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = 0;
+    dirty.current = { items: false, doc: false };
+    editRef.current = null;
+    setEditing(null);
+    setRenaming(null);
+    histories.current = new Map();
+    meta.current = readBoardDoc();
+    prefsRef.current = meta.current.prefs;
+    setPrefs(meta.current.prefs);
+    loadActive();
   }
 
   /* ---------- Tools and properties ---------- */
@@ -334,6 +479,7 @@ export default function Board() {
   function applicable(it, key) {
     if (key === "bg") return it.type === "note";
     if (key === "fill") return it.type === "rect" || it.type === "ellipse";
+    if (key === "width") return hasStroke(it);
     return it.type !== "note";
   }
   function setProp(key, value) {
@@ -345,14 +491,22 @@ export default function Board() {
         if (!ids.has(it.id) || !applicable(it, key)) return it;
         changed = true;
         if (key === "size" && it.type === "text") return { ...it, fs: TEXT_SIZE[value] };
+        if (key === "size") { const { size, ...rest } = it; return { ...rest, sw: STROKE[strokeKind(it)][value] }; }
+        if (key === "width") { const { size, ...rest } = it; return { ...rest, sw: clampWidth(value) }; }
         return { ...it, [key]: value };
       });
-      if (changed) apply(next, items);
+      if (changed) {
+        if (key === "width") applyMerged(next, "width");
+        else apply(next, items);
+      }
       return;
     }
     const pk = PREF_KEY[toolRef.current];
     if (!pk) return;
-    const nextPrefs = { ...prefsRef.current, [pk]: { ...prefsRef.current[pk], [key]: value } };
+    let patch = { [key]: value };
+    if (key === "size" && pk !== "text") patch = { width: STROKE[pk][value] };
+    if (key === "width") patch = { width: clampWidth(value) };
+    const nextPrefs = { ...prefsRef.current, [pk]: { ...prefsRef.current[pk], ...patch } };
     prefsRef.current = nextPrefs;
     setPrefs(nextPrefs);
     scheduleSave();
@@ -584,7 +738,7 @@ export default function Board() {
     if (t === "pen" || t === "highlighter") {
       const pr = prefsRef.current[t];
       const pt = e.pointerType === "pen" ? [r1(w[0]), r1(w[1]), Math.round((e.pressure || 0.5) * 100) / 100] : [r1(w[0]), r1(w[1])];
-      const item = { id: uid(), type: t, color: pr.color, size: pr.size, points: [pt] };
+      const item = { id: uid(), type: t, color: pr.color, sw: pr.width, points: [pt] };
       drag.current = { kind: "draw", before: items, item, pen: e.pointerType === "pen" };
       doc.current.items = [...items, item];
       requestPaint();
@@ -597,7 +751,7 @@ export default function Board() {
     }
     if (t === "rect" || t === "ellipse" || t === "arrow" || t === "line") {
       const pr = prefsRef.current.shape;
-      const base = { id: uid(), type: t, color: pr.color, size: pr.size };
+      const base = { id: uid(), type: t, color: pr.color, sw: pr.width };
       const item = G.isLine(base)
         ? { ...base, points: [[r1(w[0]), r1(w[1])], [r1(w[0]), r1(w[1])]] }
         : { ...base, fill: !!pr.fill, x: r1(w[0]), y: r1(w[1]), w: 0, h: 0 };
@@ -675,7 +829,7 @@ export default function Board() {
 
   function eraseAlong(a, b) {
     const z = viewRef.current.z;
-    const tol = ERASE_R / z;
+    const tol = eraseR() / z;
     const dist = Math.hypot(b[0] - a[0], b[1] - a[1]);
     const steps = Math.max(1, Math.ceil(dist / (tol / 2)));
     const items = doc.current.items;
@@ -843,7 +997,6 @@ export default function Board() {
     const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
     if (typing || e.isComposing) return;
     const dlg = dialogRef.current;
-    if (dlg.confirm) return;
     if (dlg.help) {
       if (e.key === "Escape" || e.key === "?") { e.preventDefault(); setHelpOpen(false); }
       return;
@@ -852,6 +1005,7 @@ export default function Board() {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const onButton = t && (t.tagName === "BUTTON" || t.tagName === "A");
+    if (t && t.closest && t.closest("[role=tablist]") && !mod) return;
     const zoomOwned = overRef.current || rootRef.current?.contains(document.activeElement);
 
     if (mod) {
@@ -931,7 +1085,7 @@ export default function Board() {
 
   /* Latest handlers for listeners attached once. */
   const live = useRef(null);
-  live.current = { onKeyDown, onKeyUp, onWheel, paint, zoomToFit, flushSave, commitEdit, zoomAt };
+  live.current = { onKeyDown, onKeyUp, onWheel, paint, zoomToFit, flushSave, commitEdit, zoomAt, reloadFromStorage };
 
   /* ---------- Effects ---------- */
   useEffect(() => {
@@ -946,7 +1100,7 @@ export default function Board() {
       muted: v("--muted", "#5e574e")
     };
     G.setFont(v("--font-sans", ""));
-    if (initial.current.migrated) live.current.flushSave();
+    if (needsWrite.current) { needsWrite.current = false; live.current.flushSave(); }
 
     const stage = stageRef.current;
     const canvas = canvasRef.current;
@@ -987,6 +1141,8 @@ export default function Board() {
       gz = e.scale;
     };
     const hide = () => live.current.flushSave();
+    const replaced = () => live.current.reloadFromStorage();
+    window.addEventListener("board:replaced", replaced);
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
     window.addEventListener("blur", blur);
@@ -1002,6 +1158,7 @@ export default function Board() {
       window.removeEventListener("keyup", ku);
       window.removeEventListener("blur", blur);
       window.removeEventListener("pagehide", hide);
+      window.removeEventListener("board:replaced", replaced);
       root.removeEventListener("wheel", wh);
       root.removeEventListener("pointerenter", enter);
       root.removeEventListener("pointerleave", leave);
@@ -1046,24 +1203,51 @@ export default function Board() {
     const c = selItems.find((it) => it.type !== "note");
     const f = selItems.find((it) => it.type === "rect" || it.type === "ellipse");
     const n = selItems.find((it) => it.type === "note");
+    const w = selItems.find(hasStroke);
     ctl = {
       color: c ? c.color : undefined,
-      size: c ? (c.type === "text" ? sizeFromFs(c.fs) : c.size) : undefined,
+      size: c ? (c.type === "text" ? sizeFromFs(c.fs) : quickFor(strokeKind(c), G.strokeWidth(c))) : undefined,
+      width: w ? G.strokeWidth(w) : undefined,
       fill: f ? !!f.fill : undefined,
       bg: n ? n.bg : undefined,
       selection: true
     };
   } else if (PREF_KEY[tool]) {
-    const p = prefs[PREF_KEY[tool]];
-    ctl = { color: p.color, size: p.size, fill: PREF_KEY[tool] === "shape" && (tool === "rect" || tool === "ellipse") ? !!p.fill : undefined, bg: p.bg };
+    const pk = PREF_KEY[tool];
+    const p = prefs[pk];
+    ctl = {
+      color: p.color,
+      size: pk === "text" ? p.size : p.width !== undefined ? quickFor(pk, p.width) : undefined,
+      width: p.width,
+      fill: pk === "shape" && (tool === "rect" || tool === "ellipse") ? !!p.fill : undefined,
+      bg: p.bg
+    };
   }
   const canUndo = doc.current.past.length > 0;
   const canRedo = doc.current.future.length > 0;
   const count = items.length;
-  const label = "Whiteboard, " + (count ? count + (count === 1 ? " item" : " items") : "empty") + (sel.length ? ", " + sel.length + " selected" : "");
+  const boards = meta.current.boards;
+  const active = activeBoard();
+  const label = "Whiteboard " + active.name + ", " + (count ? count + (count === 1 ? " item" : " items") : "empty") + (sel.length ? ", " + sel.length + " selected" : "");
   const tipSide = phone ? "top" : "right";
   const editItem = editing ? items.find((i) => i.id === editing) : null;
 
+  function onTabsKey(e) {
+    if (e.target.tagName === "INPUT") return;
+    const i = boards.findIndex((b) => b.id === active.id);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (i + 1) % boards.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + boards.length) % boards.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = boards.length - 1;
+    else if (e.key === "F2") { e.preventDefault(); setRenaming(active.id); return; }
+    else if (e.key === "Delete" && boards.length > 1) { e.preventDefault(); deleteBoard(active.id); return; }
+    else return;
+    e.preventDefault();
+    const id = boards[next].id;
+    switchBoard(id);
+    requestAnimationFrame(() => document.getElementById("wb-tab-" + id)?.focus());
+  }
   function onToolbarKey(e) {
     const n = TOOL_LIST.length + 2;
     let i = rove;
@@ -1092,6 +1276,93 @@ export default function Board() {
 
   return (
     <section className={"wb" + (phone ? " is-phone" : "")} ref={rootRef} tabIndex={-1} aria-label="Whiteboard">
+      <div className="wb-tabs">
+        <div className="wb-tablist" role="tablist" aria-label="Boards" onKeyDown={onTabsKey}>
+          {boards.map((b) =>
+            renaming === b.id ? (
+              <input
+                key={b.id}
+                className="wb-tab-input"
+                defaultValue={b.name}
+                maxLength={40}
+                aria-label="Board name"
+                autoFocus
+                onFocus={(e) => e.target.select()}
+                onBlur={(e) => renameBoard(b.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); e.target.blur(); }
+                  else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setRenaming(null); }
+                }}
+              />
+            ) : (
+              <button
+                key={b.id}
+                type="button"
+                role="tab"
+                id={"wb-tab-" + b.id}
+                className="wb-tab"
+                aria-selected={b.id === active.id}
+                aria-controls="wb-panel"
+                tabIndex={b.id === active.id ? 0 : -1}
+                title={b.name}
+                onClick={() => switchBoard(b.id)}
+                onDoubleClick={() => setRenaming(b.id)}
+              >
+                {b.name}
+              </button>
+            )
+          )}
+        </div>
+        <IconButton
+          icon="plus"
+          label={boards.length >= BOARD_LIMIT ? "Up to " + BOARD_LIMIT + " boards" : "New board"}
+          side="bottom"
+          className="wb-tab-add"
+          disabled={boards.length >= BOARD_LIMIT}
+          onClick={() => boards.length < BOARD_LIMIT && addBoard()}
+        />
+        <div className="wb-menu-wrap">
+          <IconButton
+            btnRef={menuBtnRef}
+            icon="more"
+            label="Board menu"
+            side="bottom-end"
+            className="wb-menu-btn"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-controls="wb-menu"
+            onClick={() => { commitEdit(); setMenuOpen((o) => !o); }}
+          />
+          {menuOpen && (
+          <div className="wb-menu" id="wb-menu" role="menu" aria-label="Board" ref={menuRef} onKeyDown={onMenuKey}>
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setRenaming(active.id); }}>
+              <Icon name="text" /><span>Rename board</span><kbd>F2</kbd>
+            </button>
+            <button type="button" role="menuitem" aria-disabled={boards.length >= BOARD_LIMIT || undefined} onClick={() => boards.length < BOARD_LIMIT && addBoard()}>
+              <Icon name="plus" /><span>New board</span>
+            </button>
+            <span className="wb-menu-sep" role="separator" />
+            <button type="button" role="menuitem" aria-disabled={!count || undefined} onClick={() => count && exportPng()}>
+              <Icon name="download" /><span>Export as PNG</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); zoomToFit(); }}>
+              <Icon name="fit" /><span>Zoom to fit</span><kbd>Shift 1</kbd>
+            </button>
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setHelpOpen(true); }}>
+              <Icon name="keyboard" /><span>Keyboard shortcuts</span><kbd>?</kbd>
+            </button>
+            <span className="wb-menu-sep" role="separator" />
+            <button type="button" role="menuitem" className="is-danger" aria-disabled={!count || undefined} onClick={() => count && clearBoard()}>
+              <Icon name="clear" /><span>Clear board</span>
+            </button>
+            <button type="button" role="menuitem" className="is-danger" aria-disabled={boards.length <= 1 || undefined} onClick={() => boards.length > 1 && deleteBoard(active.id)}>
+              <Icon name="trash" /><span>Delete board</span>
+            </button>
+          </div>
+          )}
+        </div>
+      </div>
+      <div className="wb-body" id="wb-panel" role="tabpanel" aria-labelledby={"wb-tab-" + active.id}>
       <div className="wb-stage" ref={stageRef}>
         <canvas
           ref={canvasRef}
@@ -1226,7 +1497,7 @@ export default function Board() {
           {ctl.size !== undefined && (
             <>
               <span className="wb-sep" role="separator" />
-              <div className="wb-group" role="radiogroup" aria-label={ctl.selection ? "Size" : tool === "text" ? "Text size" : "Stroke width"}>
+              <div className="wb-group" role="radiogroup" aria-label={ctl.selection ? "Size" : tool === "text" ? "Text size" : tool === "eraser" ? "Eraser size" : "Stroke width"}>
                 {Object.entries(SIZES).map(([k, name]) => (
                   <button
                     key={k}
@@ -1243,6 +1514,21 @@ export default function Board() {
                 ))}
               </div>
             </>
+          )}
+          {ctl.width !== undefined && (
+            <label className="wb-width">
+              <input
+                type="range"
+                min={WIDTH_MIN}
+                max={WIDTH_MAX}
+                step={0.5}
+                value={ctl.width}
+                aria-label={tool === "eraser" ? "Eraser width" : "Stroke width"}
+                aria-valuetext={fmtWidth(ctl.width) + " pixels"}
+                onChange={(e) => setProp("width", Number(e.target.value))}
+              />
+              <output aria-hidden="true">{fmtWidth(ctl.width)}</output>
+            </label>
           )}
           {ctl.fill !== undefined && (
             <>
@@ -1263,37 +1549,6 @@ export default function Board() {
         </div>
       )}
 
-      <div className="wb-corner">
-        <IconButton
-          btnRef={menuBtnRef}
-          icon="more"
-          label="Board menu"
-          side="bottom-end"
-          className="wb-float wb-menu-btn"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          aria-controls="wb-menu"
-          onClick={() => { commitEdit(); setMenuOpen((o) => !o); }}
-        />
-        {menuOpen && (
-          <div className="wb-menu" id="wb-menu" role="menu" aria-label="Board" ref={menuRef} onKeyDown={onMenuKey}>
-            <button type="button" role="menuitem" aria-disabled={!count || undefined} onClick={() => count && exportPng()}>
-              <Icon name="download" /><span>Export as PNG</span>
-            </button>
-            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); zoomToFit(); }}>
-              <Icon name="fit" /><span>Zoom to fit</span><kbd>Shift 1</kbd>
-            </button>
-            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setHelpOpen(true); }}>
-              <Icon name="keyboard" /><span>Keyboard shortcuts</span><kbd>?</kbd>
-            </button>
-            <span className="wb-menu-sep" role="separator" />
-            <button type="button" role="menuitem" className="is-danger" aria-disabled={!count || undefined} onClick={() => { if (!count) return; setMenuOpen(false); setConfirmOpen(true); }}>
-              <Icon name="clear" /><span>Clear board</span>
-            </button>
-          </div>
-        )}
-      </div>
-
       <div className="wb-zoom wb-float" role="group" aria-label="Zoom">
         <IconButton icon="minus" label="Zoom out" keys={[MOD, "−"]} ariaKeys={MOD_ARIA + "+-"} side="top" disabled={zoom <= G.ZOOM_MIN + 1e-3} onClick={() => zoomStep(-1)} />
         <button type="button" className="wb-btn wb-zoom-pct" aria-label={"Zoom " + Math.round(zoom * 100) + "%, reset to 100%"} aria-keyshortcuts={MOD_ARIA + "+0"} onClick={zoomReset}>
@@ -1305,8 +1560,9 @@ export default function Board() {
         <IconButton icon="fit" label="Zoom to fit" keys={["Shift", "1"]} ariaKeys="Shift+1" side="top-end" onClick={zoomToFit} />
       </div>
 
+      </div>
+
       {helpOpen && <HelpDialog onClose={() => { setHelpOpen(false); rootRef.current?.focus({ preventScroll: true }); }} />}
-      {confirmOpen && <ConfirmDialog count={count} onCancel={() => { setConfirmOpen(false); menuBtnRef.current?.focus(); }} onConfirm={clearBoard} />}
     </section>
   );
 }
@@ -1366,23 +1622,6 @@ function HelpDialog({ onClose }) {
               </dl>
             </section>
           ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmDialog({ count, onCancel, onConfirm }) {
-  const ref = useRef(null);
-  useDialogFocus(ref, onCancel);
-  return (
-    <div className="wb-scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div className="wb-dialog wb-confirm" role="alertdialog" aria-modal="true" aria-labelledby="wb-clear-title" aria-describedby="wb-clear-desc" ref={ref}>
-        <h2 id="wb-clear-title">Clear the board?</h2>
-        <p id="wb-clear-desc">This removes all {count} {count === 1 ? "item" : "items"}. You can undo it.</p>
-        <div className="wb-actions">
-          <button type="button" className="wb-text-btn" data-autofocus onClick={onCancel}>Cancel</button>
-          <button type="button" className="wb-text-btn is-danger" onClick={onConfirm}>Clear board</button>
         </div>
       </div>
     </div>

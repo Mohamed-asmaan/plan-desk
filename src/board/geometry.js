@@ -16,6 +16,7 @@ export function isLine(it) { return it.type === "line" || it.type === "arrow"; }
 export function isBox(it) { return it.type === "rect" || it.type === "ellipse" || it.type === "note"; }
 
 export function strokeWidth(it) {
+  if (it.sw > 0) return it.sw;
   if (it.type === "pen") return STROKE.pen[it.size] || STROKE.pen.m;
   if (it.type === "highlighter") return STROKE.highlighter[it.size] || STROKE.highlighter.m;
   return STROKE.shape[it.size] || STROKE.shape.m;

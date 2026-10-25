@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { COLOR_LABEL, NOTE_COLORS, noteStamp, uid } from "./model.js";
+import { toast } from "./toast.jsx";
 
 /* Sticky notes. Each keeps when it was written and when it was last edited. */
 export default function Notes({ state, update }) {
@@ -35,9 +36,16 @@ export default function Notes({ state, update }) {
     });
   }
 
+  // Delete at once and offer Undo, rather than asking first.
   function remove(id) {
-    if (!window.confirm("Delete this note?")) return;
+    const index = state.stickies.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const note = state.stickies[index];
     update((draft) => { draft.stickies = draft.stickies.filter((item) => item.id !== id); return draft; });
+    toast("Note deleted", () => update((draft) => {
+      if (!draft.stickies.some((item) => item.id === note.id)) draft.stickies.splice(Math.min(index, draft.stickies.length), 0, note);
+      return draft;
+    }));
   }
 
   return (

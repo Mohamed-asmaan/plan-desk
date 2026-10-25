@@ -132,8 +132,8 @@ function Plan({ state, update, today }) {
   // Arrow keys move between days.
   useEffect(() => {
     const onKey = (event) => {
-      if (event.altKey || event.metaKey || event.ctrlKey) return;
-      if (event.target.closest && event.target.closest("input, textarea, select, [contenteditable], .split, dialog")) return;
+      if (event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey) return;
+      if (event.target.closest && event.target.closest("input, textarea, select, [contenteditable], .split, .tile-bar, dialog")) return;
       if (event.key === "ArrowLeft") { event.preventDefault(); shiftDay(-1); }
       if (event.key === "ArrowRight") { event.preventDefault(); shiftDay(1); }
     };
@@ -222,33 +222,103 @@ function Overview({ state, update, active, today, openDay }) {
     saveTiles(next);
     return next;
   });
-  const move = (id, targetId, before) => setConfig((prev) => {
-    const ids = orderedTiles(defs, prev).map((def) => def.id).filter((x) => x !== id);
-    const at = ids.indexOf(targetId);
-    if (at < 0) return prev;
+  // Puts tile `id` right before `targetId` (or right after), or at the start
+  // or end of its group when targetId is null.
+  const move = (id, targetId, before) => change((c) => {
+    const all = orderedTiles(defs, c).map((def) => def.id);
+    const ids = all.filter((x) => x !== id);
+    let at = targetId ? ids.indexOf(targetId) : -1;
+    if (targetId && at < 0) return c;
+    if (!targetId) {
+      const isMonth = (x) => x.startsWith("month-");
+      const peers = ids.filter((x) => isMonth(x) === isMonth(id));
+      at = before ? ids.indexOf(peers[0]) : ids.indexOf(peers[peers.length - 1]);
+      if (at < 0) return c;
+    }
     ids.splice(before ? at : at + 1, 0, id);
-    return { ...prev, order: ids };
+    c.order = ids;
+    return c;
   });
-  const commitOrder = () => setConfig((prev) => { saveTiles(prev); return prev; });
   const activeMonth = (() => { const d = dayByKey.get(active); return d ? "month-" + d.y + "-" + d.m : ""; })();
 
-  const group = (name, items) => (
-    <div className={"tiles tiles-" + name + (editing ? " is-editing" : "")} data-group={name}>
-      {items.map((def) => (
+  // Pointer drag: the tile floats under the pointer (fixed position) and a
+  // dashed gap marks where it will land among the other tiles of its group.
+  const [drag, setDrag] = useState(null);
+  const startDrag = (def, event, tile) => {
+    const box = tile.getBoundingClientRect();
+    const grid = tile.parentElement;
+    const others = [...grid.querySelectorAll(":scope > .tile")].filter((node) => node !== tile).map((node) => node.dataset.tile);
+    const start = [...grid.querySelectorAll(":scope > .tile")].indexOf(tile);
+    const state0 = { id: def.id, dx: event.clientX - box.left, dy: event.clientY - box.top, left: box.left, top: box.top, width: box.width, height: box.height, gap: start, others };
+    setDrag(state0);
+    let current = state0;
+    const moveTo = (e) => {
+      const pane = grid.closest(".cal-pane");
+      if (pane) {
+        const r = pane.getBoundingClientRect();
+        if (e.clientY < r.top + 48) pane.scrollTop -= 14;
+        else if (e.clientY > r.bottom - 48) pane.scrollTop += 14;
+      }
+      let gap = current.gap;
+      const hit = document.elementsFromPoint(e.clientX, e.clientY)
+        .map((node) => node.closest && node.closest(".tile"))
+        .find((node) => node && node !== tile && node.parentElement === grid);
+      if (hit) {
+        const r = hit.getBoundingClientRect();
+        const gapNode = grid.querySelector(":scope > .tile-gap");
+        const g = gapNode ? gapNode.getBoundingClientRect() : r;
+        const sameRow = Math.abs(g.top - r.top) < Math.min(r.height, g.height) * 0.5;
+        const before = sameRow ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;
+        const at = current.others.indexOf(hit.dataset.tile);
+        if (at >= 0) gap = before ? at : at + 1;
+      }
+      current = { ...current, left: e.clientX - current.dx, top: e.clientY - current.dy, gap };
+      setDrag(current);
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", moveTo);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      const { others, gap } = current;
+      if (others.length) {
+        if (gap >= others.length) move(def.id, others[others.length - 1], false);
+        else move(def.id, others[gap], true);
+      }
+      setDrag(null);
+      requestAnimationFrame(() => tile.querySelector(".grip")?.focus());
+    };
+    window.addEventListener("pointermove", moveTo);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
+  const group = (name, items) => {
+    const children = [];
+    const inGroup = drag && items.some((def) => def.id === drag.id);
+    let k = 0;
+    for (const def of items) {
+      if (inGroup && def.id !== drag.id && k === drag.gap) children.push(<div key="gap" className="tile-gap" style={{ width: drag.width, height: drag.height }} />);
+      if (!inGroup || def.id !== drag.id) k += 1;
+      const dragging = inGroup && def.id === drag.id;
+      children.push(
         <Tile
           key={def.id}
           def={def}
           editing={editing}
           half={def.half && config.size[def.id] === "half"}
           extra={def.id === activeMonth ? " has-active" : ""}
+          dragging={dragging}
+          dragStyle={dragging ? { left: drag.left, top: drag.top, width: drag.width } : undefined}
+          onDragStart={startDrag}
           onHalf={() => change((c) => { if (c.size[def.id]) delete c.size[def.id]; else c.size[def.id] = "half"; return c; })}
           onHide={() => change((c) => { if (!c.hidden.includes(def.id)) c.hidden.push(def.id); return c; })}
           onMove={move}
-          onMoved={commitOrder}
         />
-      ))}
-    </div>
-  );
+      );
+    }
+    if (inGroup && drag.gap >= drag.others.length) children.push(<div key="gap" className="tile-gap" style={{ width: drag.width, height: drag.height }} />);
+    return <div className={"tiles tiles-" + name + (editing ? " is-editing" : "")} data-group={name}>{children}</div>;
+  };
 
   return (
     <aside className="cal-pane">
@@ -299,67 +369,62 @@ function Overview({ state, update, active, today, openDay }) {
   );
 }
 
-function Tile({ def, editing, half, extra, onHalf, onHide, onMove, onMoved }) {
+function Tile({ def, editing, half, extra, dragging, dragStyle, onDragStart, onHalf, onHide, onMove }) {
   const ref = useRef(null);
-  const [dragging, setDragging] = useState(false);
 
   function down(event) {
     if (event.button !== 0) return;
     event.preventDefault();
-    const grip = event.currentTarget;
-    const tile = ref.current;
-    const grid = tile.parentElement;
-    try { grip.setPointerCapture(event.pointerId); } catch (e) { /* plain pointer events */ }
-    setDragging(true);
-    function moveTo(e) {
-      const pane = grid.closest(".cal-pane");
-      if (pane) {
-        const r = pane.getBoundingClientRect();
-        if (e.clientY < r.top + 40) pane.scrollTop -= 10;
-        else if (e.clientY > r.bottom - 40) pane.scrollTop += 10;
-      }
-      const over = document.elementsFromPoint(e.clientX, e.clientY)
-        .find((node) => node.classList && node.classList.contains("tile") && node !== tile && node.parentElement === grid);
-      if (!over) return;
-      const r = over.getBoundingClientRect();
-      const mine = tile.getBoundingClientRect();
-      const sameRow = Math.abs(mine.top - r.top) < 1;
-      const before = sameRow ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;
-      onMove(def.id, over.dataset.tile, before);
-    }
-    function end() {
-      grip.removeEventListener("pointermove", moveTo);
-      grip.removeEventListener("pointerup", end);
-      grip.removeEventListener("pointercancel", end);
-      setDragging(false);
-      onMoved();
-    }
-    grip.addEventListener("pointermove", moveTo);
-    grip.addEventListener("pointerup", end);
-    grip.addEventListener("pointercancel", end);
+    onDragStart(def, event, ref.current);
   }
 
+  // Arrow keys move the tile to its nearest neighbour in that direction
+  // (rows for left/right, columns for up/down); Home and End jump to the ends.
   function key(event) {
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    const k = event.key;
+    if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(k)) return;
     event.preventDefault();
     const tile = ref.current;
-    const sibling = event.key === "ArrowUp" ? tile.previousElementSibling : tile.nextElementSibling;
-    if (!sibling) return;
-    onMove(def.id, sibling.dataset.tile, event.key === "ArrowUp");
-    onMoved();
-    requestAnimationFrame(() => tile.querySelector(".grip")?.focus());
+    const refocus = () => requestAnimationFrame(() => tile.querySelector(".grip")?.focus());
+    if (k === "Home" || k === "End") { onMove(def.id, null, k === "Home"); refocus(); return; }
+    const mine = tile.getBoundingClientRect();
+    const cx = mine.left + mine.width / 2;
+    const cy = mine.top + mine.height / 2;
+    const siblings = [...tile.parentElement.querySelectorAll(":scope > .tile")];
+    let best = null;
+    let score = Infinity;
+    for (const other of siblings) {
+      if (other === tile) continue;
+      const r = other.getBoundingClientRect();
+      const dx = r.left + r.width / 2 - cx;
+      const dy = r.top + r.height / 2 - cy;
+      const row = Math.abs(dy) < Math.max(mine.height, r.height) * 0.45;
+      const ok = k === "ArrowLeft" ? row && dx < -4 : k === "ArrowRight" ? row && dx > 4 : k === "ArrowUp" ? dy < -4 : dy > 4;
+      if (!ok) continue;
+      const dist = k === "ArrowUp" || k === "ArrowDown" ? dy * dy + dx * dx * 0.15 : dx * dx + dy * dy;
+      if (dist < score) { best = other; score = dist; }
+    }
+    if (!best) {
+      const index = siblings.indexOf(tile);
+      if ((k === "ArrowLeft" || k === "ArrowUp") && index > 0) best = siblings[index - 1];
+      if ((k === "ArrowRight" || k === "ArrowDown") && index < siblings.length - 1) best = siblings[index + 1];
+    }
+    if (!best) return;
+    onMove(def.id, best.dataset.tile, k === "ArrowLeft" || k === "ArrowUp");
+    refocus();
   }
 
   return (
     <section
       ref={ref}
       className={"tile" + (def.month ? " cal-tile" : "") + (half ? " half" : "") + (dragging ? " is-dragging" : "") + extra}
+      style={dragStyle}
       data-tile={def.id}
       aria-label={def.name}
     >
       {editing ? (
         <div className="tile-bar">
-          <button type="button" className="grip" aria-label={"Move " + def.name + ". Drag, or use the arrow keys."} onPointerDown={down} onKeyDown={key}>
+          <button type="button" className="grip" aria-label={"Move " + def.name} aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Home End" onPointerDown={down} onKeyDown={key}>
             <i aria-hidden="true" />
           </button>
           <span className="tile-name">{def.name}</span>

@@ -31,7 +31,7 @@ Settings → Sync devices. Make a GitHub token with only the **gist** scope, pas
 
 - Progress is mirrored to one private Gist named "GSoC plan desk sync" on your account.
 - The app pulls when it opens, when you return to it, when it comes back online, and every two minutes. It pushes a few seconds after each change.
-- Changes merge per task and per note, so a tick on the phone and a different tick on the laptop both survive. The focus timer and the whiteboard stay on each device.
+- Changes merge per task, per note and per whiteboard, so a tick on the phone and a different tick on the laptop both survive. A second sync Gist made by another device is folded in. The focus timer stays on each device.
 - The token is stored in this browser only. Disconnect removes it.
 
 ## The desk
@@ -40,7 +40,7 @@ Settings → Sync devices. Make a GitHub token with only the **gist** scope, pas
 - **Phones.** One full-width month and one day card, with Previous / Today / Next. Progress, streak and key dates open from the % button in the header.
 - **Focus.** A pomodoro timer and stopwatch. Time lands on the task you started it from. Daily reminders.
 - **Notes.** A note remembers when it was written and last edited.
-- **Board.** A whiteboard with pen, highlighter, shapes, arrows, text and sticky notes, zoom and pan, undo, and PNG export. Press `?` for shortcuts.
+- **Board.** Up to eight whiteboards with pen, highlighter, shapes, arrows, text and sticky notes, a width slider, zoom and pan, undo, and PNG export. Press `?` for shortcuts. Deleting or clearing offers Undo instead of asking first.
 - **Settings.** Sync devices, and Download or Restore a backup.
 
 ## Files

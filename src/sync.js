@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { formatStamp, normalize } from "./model.js";
+import { emptyState, formatStamp, normalize } from "./model.js";
+import { mergeBoardDocs, normalizeBoardDoc, readBoardDoc, writeBoardDoc } from "./board/doc.js";
 
-/* GitHub Gist sync. Progress is mirrored to one private Gist so a phone and
-   a laptop stay in step. Each side keeps the last copy both agreed on (base)
+/* GitHub Gist sync. Progress and whiteboards are mirrored to one private
+   Gist so a phone and a laptop stay in step. Each side keeps the last copy both agreed on (base)
    and merges field by field: whatever changed here since the base wins over
    the remote, everything else takes the remote. So a tick on one device and
    an untick on another both survive. The timer stays per device.
@@ -93,15 +94,53 @@ async function gh(path, opts) {
   return res.json();
 }
 
-async function findOrMakeGist() {
-  const list = await gh("/gists?per_page=100");
-  const found = list.find((g) => g.description === GIST_DESC && g.files && g.files[GIST_FILE]);
-  if (found) return found.id;
-  const made = await gh("/gists", {
-    method: "POST",
-    body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(syncable(host.getState())) } } })
-  });
-  return made.id;
+/* The Gist holds { ...study, board }. Older devices wrote study only. The
+   base we keep is { study, board }; a base saved before boards synced is
+   the study object itself. */
+function baseStudy(base) {
+  if (!base || typeof base !== "object") return {};
+  if (base.study && typeof base.study === "object") return base.study;
+  if (base.done || base.dayNotes || base.stickies || base.logs) return base;
+  return {};
+}
+
+function parsePayload(text) {
+  const data = JSON.parse(text);
+  return { study: syncable(normalize(data)), board: data && data.board ? normalizeBoardDoc(data.board) : null };
+}
+
+async function gistText(gist) {
+  const file = gist.files && gist.files[GIST_FILE];
+  if (!file) return "";
+  if (typeof file.content === "string" && !file.truncated) return file.content;
+  if (!file.raw_url) return typeof file.content === "string" ? file.content : "";
+  const res = await fetch(file.raw_url, { headers: { Authorization: "Bearer " + conf.token, Accept: "application/vnd.github.raw" } });
+  if (!res.ok) throw new Error("http " + res.status);
+  return res.text();
+}
+
+async function readGist(id) {
+  const gist = await gh("/gists/" + id);
+  const text = await gistText(gist);
+  return { id, updated: gist.updated_at || "", payload: text ? parsePayload(text) : { study: syncable(emptyState()), board: null } };
+}
+
+// Every sync Gist on the account: a second one made by another device is
+// folded in rather than ignored.
+async function listSyncGists() {
+  const found = [];
+  for (let page = 1; page <= 10; page++) {
+    const list = await gh("/gists?per_page=100&page=" + page);
+    if (!Array.isArray(list) || !list.length) break;
+    for (const gist of list) if (gist && gist.id && gist.description === GIST_DESC) found.push(gist);
+    if (list.length < 100) break;
+  }
+  return found;
+}
+
+function writeGist(id, packed) {
+  const body = JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(packed) } } });
+  return id ? gh("/gists/" + id, { method: "PATCH", body }) : gh("/gists", { method: "POST", body });
 }
 
 export async function syncNow() {
@@ -112,18 +151,33 @@ export async function syncNow() {
   error = "";
   emit();
   try {
-    if (!conf.gistId) { conf.gistId = await findOrMakeGist(); saveConf(); }
-    const gist = await gh("/gists/" + conf.gistId);
-    const file = gist.files && gist.files[GIST_FILE];
-    const current = host.getState();
-    const remote = file && file.content ? syncable(normalize(JSON.parse(file.content))) : syncable(current);
-    const local = syncable(current);
-    const merged = syncable(normalize(mergeState(local, remote, conf.base)));
-    if (!same(merged, local)) host.applyState(merged);
-    if (!same(merged, remote)) {
-      await gh("/gists/" + conf.gistId, { method: "PATCH", body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(merged) } } }) });
+    const ids = new Set(conf.gistId ? [conf.gistId] : []);
+    for (const gist of await listSyncGists()) ids.add(gist.id);
+    const copies = [];
+    for (const id of ids) {
+      try { copies.push(await readGist(id)); }
+      catch (e) { if (e.message !== "http 404") throw e; }
     }
-    conf.base = merged;
+    copies.sort((a, b) => (a.updated < b.updated ? -1 : 1));
+    let remoteStudy = null;
+    let remoteBoard = null;
+    for (const copy of copies) {
+      remoteStudy = remoteStudy ? syncable(normalize(mergeState(remoteStudy, copy.payload.study, null))) : copy.payload.study;
+      remoteBoard = remoteBoard ? mergeBoardDocs(remoteBoard, copy.payload.board, null) : copy.payload.board;
+    }
+    const localStudy = syncable(host.getState());
+    const localBoard = readBoardDoc();
+    const base = conf.base;
+    const mergedStudy = remoteStudy ? syncable(normalize(mergeState(localStudy, remoteStudy, baseStudy(base)))) : localStudy;
+    const mergedBoard = remoteBoard ? mergeBoardDocs(localBoard, remoteBoard, base && base.board) : localBoard;
+    if (!same(mergedStudy, localStudy)) host.applyState(mergedStudy);
+    if (mergedBoard && !same(mergedBoard, localBoard)) writeBoardDoc(mergedBoard, { fromRemote: true });
+    const target = copies.length ? copies[copies.length - 1].id : "";
+    if (!target || !same(mergedStudy, remoteStudy) || !same(mergedBoard, remoteBoard)) {
+      const written = await writeGist(target, Object.assign({}, mergedStudy, { board: mergedBoard }));
+      conf.gistId = written.id || target;
+    } else conf.gistId = target;
+    conf.base = { study: mergedStudy, board: mergedBoard };
     conf.at = Date.now();
     saveConf();
   } catch (e) {
