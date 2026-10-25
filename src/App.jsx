@@ -16,19 +16,21 @@ import Plan from "./Plan.jsx";
 import Focus from "./Focus.jsx";
 import Notes from "./Notes.jsx";
 import Board from "./Board.jsx";
+import Code from "./Code.jsx";
 
 const RAIL_KEY = "gsoc-study-rail";
-const TITLES = { plan: "Today", focus: "Focus", notes: "Notes", board: "Board", missing: "Day" };
+const TITLES = { plan: "Today", focus: "Focus", notes: "Notes", board: "Board", code: "Code", missing: "Day" };
 const NAV = [
   { id: "plan", href: "#/today", label: "Plan" },
   { id: "focus", href: "#/focus", label: "Focus" },
   { id: "notes", href: "#/notes", label: "Notes" },
-  { id: "board", href: "#/board", label: "Board" }
+  { id: "board", href: "#/board", label: "Board" },
+  { id: "code", href: "#/code", label: "Code" }
 ];
 
 function readRoute() {
   const parts = (location.hash || "").replace(/^#/, "").split("/").filter(Boolean);
-  if (parts[0] === "focus" || parts[0] === "notes" || parts[0] === "board") return parts[0];
+  if (parts[0] === "focus" || parts[0] === "notes" || parts[0] === "board" || parts[0] === "code") return parts[0];
   if (parts[0] === "day") return parts[1] && dayByKey.has(parts[1]) ? "plan" : "missing";
   return "plan";
 }
@@ -205,6 +207,7 @@ export default function App() {
           {route === "focus" && <Focus state={state} update={update} />}
           {route === "notes" && <Notes state={state} update={update} />}
           {route === "board" && <Board />}
+          {route === "code" && <Code />}
           {route === "missing" && (
             <>
               <h2>That day isn't in the plan</h2>

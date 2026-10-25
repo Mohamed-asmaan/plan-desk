@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { emptyState, formatStamp, normalize } from "./model.js";
 import { mergeBoardDocs, normalizeBoardDoc, readBoardDoc, writeBoardDoc } from "./board/doc.js";
+import { mergeCodeDocs, normalizeCodeDoc, readCodeDoc, writeCodeDoc } from "./code/doc.js";
 
 /* GitHub Gist sync. Progress and whiteboards are mirrored to one private
    Gist so a phone and a laptop stay in step. Each side keeps the last copy both agreed on (base)
@@ -106,7 +107,11 @@ function baseStudy(base) {
 
 function parsePayload(text) {
   const data = JSON.parse(text);
-  return { study: syncable(normalize(data)), board: data && data.board ? normalizeBoardDoc(data.board) : null };
+  return {
+    study: syncable(normalize(data)),
+    board: data && data.board ? normalizeBoardDoc(data.board) : null,
+    code: data && data.code ? normalizeCodeDoc(data.code) : null
+  };
 }
 
 async function gistText(gist) {
@@ -122,7 +127,7 @@ async function gistText(gist) {
 async function readGist(id) {
   const gist = await gh("/gists/" + id);
   const text = await gistText(gist);
-  return { id, updated: gist.updated_at || "", payload: text ? parsePayload(text) : { study: syncable(emptyState()), board: null } };
+  return { id, updated: gist.updated_at || "", payload: text ? parsePayload(text) : { study: syncable(emptyState()), board: null, code: null } };
 }
 
 // Every sync Gist on the account: a second one made by another device is
@@ -161,23 +166,28 @@ export async function syncNow() {
     copies.sort((a, b) => (a.updated < b.updated ? -1 : 1));
     let remoteStudy = null;
     let remoteBoard = null;
+    let remoteCode = null;
     for (const copy of copies) {
       remoteStudy = remoteStudy ? syncable(normalize(mergeState(remoteStudy, copy.payload.study, null))) : copy.payload.study;
       remoteBoard = remoteBoard ? mergeBoardDocs(remoteBoard, copy.payload.board, null) : copy.payload.board;
+      remoteCode = remoteCode ? mergeCodeDocs(remoteCode, copy.payload.code, null) : copy.payload.code;
     }
     const localStudy = syncable(host.getState());
     const localBoard = readBoardDoc();
+    const localCode = readCodeDoc();
     const base = conf.base;
     const mergedStudy = remoteStudy ? syncable(normalize(mergeState(localStudy, remoteStudy, baseStudy(base)))) : localStudy;
     const mergedBoard = remoteBoard ? mergeBoardDocs(localBoard, remoteBoard, base && base.board) : localBoard;
+    const mergedCode = remoteCode ? mergeCodeDocs(localCode, remoteCode, base && base.code) : localCode;
     if (!same(mergedStudy, localStudy)) host.applyState(mergedStudy);
     if (mergedBoard && !same(mergedBoard, localBoard)) writeBoardDoc(mergedBoard, { fromRemote: true });
+    if (mergedCode && !same(mergedCode, localCode)) writeCodeDoc(mergedCode, { fromRemote: true });
     const target = copies.length ? copies[copies.length - 1].id : "";
-    if (!target || !same(mergedStudy, remoteStudy) || !same(mergedBoard, remoteBoard)) {
-      const written = await writeGist(target, Object.assign({}, mergedStudy, { board: mergedBoard }));
+    if (!target || !same(mergedStudy, remoteStudy) || !same(mergedBoard, remoteBoard) || !same(mergedCode, remoteCode)) {
+      const written = await writeGist(target, Object.assign({}, mergedStudy, { board: mergedBoard, code: mergedCode }));
       conf.gistId = written.id || target;
     } else conf.gistId = target;
-    conf.base = { study: mergedStudy, board: mergedBoard };
+    conf.base = { study: mergedStudy, board: mergedBoard, code: mergedCode };
     conf.at = Date.now();
     saveConf();
   } catch (e) {
