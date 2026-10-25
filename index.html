@@ -7,98 +7,17 @@
 <meta name="theme-color" content="#f7f4ee">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title>Today · GSoC-ready</title>
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="GSoC-ready">
+<link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png">
+<link rel="manifest" href="%BASE_URL%manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=20261026l">
+<title>Plan desk</title>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<div class="app">
-  <header class="rail">
-    <div class="rail-top">
-      <div class="rail-title">
-        <div class="brand">
-          <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
-            <rect class="brand-star" x="4.1" y="4.1" width="17.8" height="17.8"/>
-            <path class="brand-star" d="M13 .4 25.6 13 13 25.6.4 13z"/>
-            <circle class="brand-core" cx="13" cy="13" r="7.3"/>
-            <path class="brand-glyph" d="M10.5 10.9 8.6 13l1.9 2.1M15.5 10.9l1.9 2.1-1.9 2.1M10.2 13h5.6"/>
-          </svg>
-          <span class="brand-name"><span>Google</span>Summer of Code</span>
-        </div>
-        <h1><span class="eyebrow">Two months to</span>GSoC-ready</h1>
-        <p id="rail-day" class="rail-day"></p>
-      </div>
-      <button id="rail-toggle" class="rail-toggle" type="button" aria-expanded="true" aria-controls="section-nav">
-        <span class="chev" aria-hidden="true"></span>
-        <span class="sr">Close sidebar</span>
-      </button>
-    </div>
-    <nav id="section-nav" class="tabs" aria-label="Sections">
-      <a href="#/today" data-nav="plan">
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="12" rx="2.5"/><path d="M3 8.5h14M7 2.75v3.5M13 2.75v3.5"/></svg>
-        <span>Plan</span>
-      </a>
-      <a href="#/focus" data-nav="focus">
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="11" r="6.25"/><path d="M10 7.75V11l2.25 1.5M8 2.75h4"/></svg>
-        <span>Focus</span>
-      </a>
-      <a href="#/notes" data-nav="notes">
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 3.5h11v8.25L11.75 15.5H4.5z"/><path d="M11.5 15.25V11.5h3.75M7.5 7.5h5M7.5 10h3"/></svg>
-        <span>Notes</span>
-      </a>
-      <a href="#/board" data-nav="board">
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="13" rx="2"/><path d="M7 12.5c1.2-2.4 2.2-3.6 6-5"/></svg>
-        <span>Board</span>
-      </a>
-    </nav>
-    <details id="rail-settings" class="rail-settings">
-      <summary>
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.75v2M10 15.25v2M2.75 10h2M15.25 10h2M4.87 4.87l1.42 1.42M13.71 13.71l1.42 1.42M4.87 15.13l1.42-1.42M13.71 6.29l1.42-1.42"/></svg>
-        <span>Settings</span>
-      </summary>
-      <div class="settings-menu">
-        <div id="sync-panel" class="sync-panel"></div>
-        <button type="button" id="backup-download">Download a backup</button>
-        <button type="button" id="backup-restore">Restore a backup</button>
-      </div>
-    </details>
-    <div class="rail-meta">
-      <button id="stats-open" class="stats-open" type="button" aria-haspopup="dialog" aria-controls="stats-sheet">
-        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16.25V11M10 16.25V4.75M16 16.25V8"/></svg>
-        <span id="stats-open-pct">0%</span>
-        <span class="sr">Progress</span>
-      </button>
-      <div id="plant" class="plant" aria-hidden="true"></div>
-      <button id="timer-chip" class="timer-chip" type="button" hidden>Timer</button>
-      <div class="rail-when">
-        <time id="clock"></time>
-        <span id="rail-date" class="rail-date"></span>
-      </div>
-    </div>
-  </header>
-  <div class="workspace">
-    <main id="main" tabindex="-1"></main>
-    <p id="save-status" class="save-status">Saved on this device</p>
-  </div>
-</div>
-<dialog id="stats-sheet" class="sheet" aria-labelledby="stats-sheet-title">
-  <div class="sheet-head">
-    <h2 id="stats-sheet-title">Progress</h2>
-    <button type="button" class="btn btn-ghost mini" id="stats-close">Done</button>
-  </div>
-  <div class="sheet-body" id="stats-sheet-body"></div>
-</dialog>
-<div id="toast" class="toast" role="status" hidden></div>
-<noscript><p class="noscript">This study tracker needs JavaScript turned on.</p></noscript>
-<script src="plan.js?v=20261026l"></script>
-<script src="app.js?v=20261026l"></script>
+<div id="root"></div>
+<script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

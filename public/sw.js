@@ -1,19 +1,10 @@
-/* Offline support for the plan desk. Network first, so a new deploy shows up
-   on the next open; the cache answers only when there is no network. GitHub
-   API calls (sync) and other origins are never cached. */
-const CACHE = "plan-desk-v1";
-const CORE = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./plan.js",
-  "./favicon.svg",
-  "./manifest.webmanifest",
-  "./icons/apple-touch-icon.png",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
-];
+/* Offline support for the plan desk (production builds only). Network first,
+   so a new deploy shows up on the next open; the cache answers only when
+   there is no network. Paths are relative to the service worker, so it works
+   under any base path (GitHub Pages serves it from /plan-desk/). GitHub API
+   calls (sync) and other origins are never cached. */
+const CACHE = "plan-desk-v2";
+const CORE = ["./", "./index.html", "./manifest.webmanifest", "./favicon.svg", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(CORE)).then(() => self.skipWaiting()));
