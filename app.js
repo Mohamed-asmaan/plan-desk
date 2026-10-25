@@ -1013,6 +1013,11 @@ const PLANT_PIXELS = [
       cell.setAttribute("aria-current", "date");
     }
     if (card) card.classList.add("is-current");
+    // Phones show only the month of the open day; mark it.
+    document.querySelectorAll(".tile.cal-tile.has-active").forEach((tile) => tile.classList.remove("has-active"));
+    const month = cell && cell.closest(".tile.cal-tile");
+    if (month) month.classList.add("has-active");
+    paintPager(key);
     if (options.scrollHash) {
       const next = hashForDay(key);
       if (location.hash !== next) history.replaceState(null, "", next);
@@ -1022,6 +1027,8 @@ const PLANT_PIXELS = [
   }
 
   function focusDay(key, behavior) {
+    const sheet = document.getElementById("stats-sheet");
+    if (sheet && sheet.open) sheet.close();
     if (!dayByKey.has(key)) {
       location.hash = hashForDay(key);
       return;
@@ -1033,12 +1040,45 @@ const PLANT_PIXELS = [
     }
     setActiveDay(key, { scrollHash: true, revealCell: true });
     const smooth = behavior === "smooth" && !reducedMotion.matches;
+    // Phones page one day at a time: no travel, only bring the card's top
+    // back into view if the reader had scrolled past it.
+    if (phone.matches) {
+      if (card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: "start" });
+      return;
+    }
     // Hold the highlight on the chosen day while the page travels to it, so
     // rows passed on the way don't take it over.
     pendingKey = key;
     clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => { pendingKey = null; }, smooth ? 1200 : 150);
     card.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  }
+
+  // On phones the board shows one day; Previous / Today / Next page it.
+  const phone = window.matchMedia("(max-width: 719px)");
+
+  function paintPager(key) {
+    const pager = document.querySelector(".day-pager");
+    if (!pager) return;
+    const i = dayIndex.get(key);
+    pager.querySelector('[data-step="-1"]').disabled = i <= 0;
+    pager.querySelector('[data-step="1"]').disabled = i >= PLAN.days.length - 1;
+    pager.querySelector('[data-step="0"]').disabled = key === clampedDay().key;
+  }
+
+  function dayPager() {
+    const step = (n, label, text) => el("button", {
+      type: "button",
+      class: "pager-btn",
+      dataset: { step: String(n) },
+      "aria-label": label,
+      onclick: () => (n ? shiftDay(n) : focusDay(clampedDay().key, "smooth"))
+    }, text);
+    return el("nav", { class: "day-pager", "aria-label": "Change day" }, [
+      step(-1, "Previous day", "‹ Previous"),
+      step(0, "Go to today", "Today"),
+      step(1, "Next day", "Next ›")
+    ]);
   }
 
   // Scrolling the day cards moves the highlight to the row at the reading
@@ -1068,7 +1108,7 @@ const PLANT_PIXELS = [
   }
 
   window.addEventListener("scroll", () => {
-    if (syncQueued || !document.querySelector(".day-board")) return;
+    if (syncQueued || phone.matches || !document.querySelector(".day-board")) return;
     syncQueued = true;
     requestAnimationFrame(syncFromScroll);
   }, { passive: true });
@@ -1148,6 +1188,8 @@ const PLANT_PIXELS = [
   function paintOverall() {
     const o = overall();
     const pct = o.total ? (o.done / o.total) * 100 : 0;
+    const chip = document.getElementById("stats-open-pct");
+    if (chip) chip.textContent = pctText(o.done, o.total);
     const pctNode = document.getElementById("overall-pct");
     if (pctNode) pctNode.textContent = pctText(o.done, o.total);
     const count = document.getElementById("overall-count");
@@ -1848,7 +1890,8 @@ const PLANT_PIXELS = [
       renderPlan(),
       handle,
       el("div", { class: "day-pane" }, [
-        el("div", { class: "day-board" }, PLAN.days.map(dayCard))
+        el("div", { class: "day-board" }, PLAN.days.map(dayCard)),
+        dayPager()
       ])
     ]);
     fitCalWidth(desk);
@@ -2212,6 +2255,7 @@ const PLANT_PIXELS = [
     main.className = pageClass;
     main.replaceChildren(...nodes.flat());
     fitCalWidth(main.querySelector(".desk"));
+    paintOverall();
     const navName = route.name === "focus" ? "focus" : route.name === "notes" ? "notes" : route.name === "missing" ? "" : "plan";
     document.querySelectorAll(".tabs a").forEach((link) => {
       if (link.dataset.nav === navName) link.setAttribute("aria-current", "page");
@@ -2310,6 +2354,31 @@ const PLANT_PIXELS = [
   });
   document.addEventListener("click", (event) => {
     if (settings.open && !settings.contains(event.target)) settings.open = false;
+  });
+
+  // Phone stats sheet. The live stat tiles move into the sheet while it is
+  // open and go back to the pane when it closes, so nothing is duplicated.
+  const statsSheet = document.getElementById("stats-sheet");
+  let summaryHome = null;
+  document.getElementById("stats-open").addEventListener("click", () => {
+    const summary = document.querySelector(".cal-pane .tiles-summary");
+    if (summary) {
+      summaryHome = document.createComment("summary");
+      summary.before(summaryHome);
+      document.getElementById("stats-sheet-body").append(summary);
+    }
+    statsSheet.showModal();
+  });
+  document.getElementById("stats-close").addEventListener("click", () => statsSheet.close());
+  statsSheet.addEventListener("click", (event) => {
+    if (event.target === statsSheet) statsSheet.close();
+  });
+  statsSheet.addEventListener("close", () => {
+    const summary = statsSheet.querySelector(".tiles-summary");
+    if (summary && summaryHome && summaryHome.isConnected) summaryHome.replaceWith(summary);
+    else if (summary) summary.remove();
+    if (summaryHome && summaryHome.isConnected) summaryHome.remove();
+    summaryHome = null;
   });
 
   document.addEventListener("pointerdown", unlockAudio, { passive: true });
