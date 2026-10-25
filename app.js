@@ -220,14 +220,18 @@
         setStatus("Saved on this device");
       }
       scheduleSync();
+      return true;
     } catch (e) {
       try {
         localStorage.setItem(KEY, json);
         saveError = false;
         setStatus("Saved on this device");
+        scheduleSync();
+        return true;
       } catch (e2) {
         saveError = true;
         setStatus("Couldn't save. Free a little space, then try that again.");
+        return false;
       }
     }
   }
@@ -2244,53 +2248,68 @@ const PLANT_PIXELS = [
     return {
       id: board && typeof board.id === "string" && board.id ? board.id : boardId(),
       name: board && typeof board.name === "string" && board.name.trim() ? board.name.trim().slice(0, 40) : "Board " + (index + 1),
-      strokes
+      strokes,
+      updatedAt: board && typeof board.updatedAt === "number" && board.updatedAt > 0 ? board.updatedAt : 0
+    };
+  }
+
+  function boardDoc(raw) {
+    const blank = () => ({ active: "board", pen: 0, erase: false, eraseW: 22, pens: defaultPens(), updatedAt: 0, boards: [{ id: "board", name: "Board", strokes: [], updatedAt: 0 }] });
+    if (Array.isArray(raw)) {
+      const doc = blank();
+      doc.boards[0].strokes = raw.map(cleanStroke).filter(Boolean).slice(-STROKE_LIMIT);
+      return doc;
+    }
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.boards)) return blank();
+    const boards = raw.boards.slice(0, BOARD_LIMIT).map(cleanBoard);
+    if (!boards.length) return blank();
+    const pens = defaultPens();
+    if (Array.isArray(raw.pens)) {
+      raw.pens.slice(0, pens.length).forEach((pen, i) => {
+        if (!pen || !BOARD_INKS[pen.ink]) return;
+        const w = Number(pen.w);
+        pens[i] = { ink: pen.ink, w: Number.isFinite(w) ? Math.min(32, Math.max(1, w)) : pens[i].w, soft: !!pen.soft };
+      });
+    }
+    const active = boards.some((board) => board.id === raw.active) ? raw.active : boards[0].id;
+    const eraseW = Number(raw.eraseW);
+    return {
+      active,
+      pen: Math.min(pens.length - 1, Math.max(0, Number(raw.pen) || 0)),
+      erase: !!raw.erase,
+      eraseW: Number.isFinite(eraseW) ? Math.min(48, Math.max(4, eraseW)) : 22,
+      pens,
+      updatedAt: typeof raw.updatedAt === "number" && raw.updatedAt > 0 ? raw.updatedAt : 0,
+      boards
     };
   }
 
   function loadBoard() {
-    const blank = () => ({ active: "board", pen: 0, erase: false, eraseW: 22, pens: defaultPens(), boards: [{ id: "board", name: "Board", strokes: [] }] });
-    try {
-      const raw = JSON.parse(localStorage.getItem(BOARD_KEY) || "null");
-      if (Array.isArray(raw)) {
-        const doc = blank();
-        doc.boards[0].strokes = raw.map(cleanStroke).filter(Boolean).slice(-STROKE_LIMIT);
-        return doc;
-      }
-      if (!raw || typeof raw !== "object" || !Array.isArray(raw.boards)) return blank();
-      const boards = raw.boards.slice(0, BOARD_LIMIT).map(cleanBoard);
-      if (!boards.length) return blank();
-      const pens = defaultPens();
-      if (Array.isArray(raw.pens)) {
-        raw.pens.slice(0, pens.length).forEach((pen, i) => {
-          if (!pen || !BOARD_INKS[pen.ink]) return;
-          const w = Number(pen.w);
-          pens[i] = { ink: pen.ink, w: Number.isFinite(w) ? Math.min(32, Math.max(1, w)) : pens[i].w, soft: !!pen.soft };
-        });
-      }
-      const active = boards.some((board) => board.id === raw.active) ? raw.active : boards[0].id;
-      const eraseW = Number(raw.eraseW);
-      return {
-        active,
-        pen: Math.min(pens.length - 1, Math.max(0, Number(raw.pen) || 0)),
-        erase: !!raw.erase,
-        eraseW: Number.isFinite(eraseW) ? Math.min(48, Math.max(4, eraseW)) : 22,
-        pens,
-        boards
-      };
-    } catch (e) { return blank(); }
+    try { return boardDoc(JSON.parse(localStorage.getItem(BOARD_KEY) || "null")); }
+    catch (e) { return boardDoc(null); }
   }
 
-  function saveBoard(doc) {
+  function saveBoard(doc, fromRemote) {
+    if (!fromRemote) {
+      const now = Date.now();
+      doc.updatedAt = now;
+      const active = doc.boards.find((board) => board.id === doc.active);
+      if (active) active.updatedAt = now;
+    }
     const copy = {
       active: doc.active,
       pen: doc.pen,
       erase: doc.erase,
       eraseW: doc.eraseW,
       pens: doc.pens,
-      boards: doc.boards.map((board) => ({ id: board.id, name: board.name, strokes: board.strokes.slice(-STROKE_LIMIT) }))
+      updatedAt: doc.updatedAt || 0,
+      boards: doc.boards.map((board) => ({ id: board.id, name: board.name, strokes: board.strokes.slice(-STROKE_LIMIT), updatedAt: board.updatedAt || 0 }))
     };
-    try { localStorage.setItem(BOARD_KEY, JSON.stringify(copy)); } catch (e) { /* keep the drawing for this visit */ }
+    try {
+      localStorage.setItem(BOARD_KEY, JSON.stringify(copy));
+      if (!fromRemote) scheduleSync();
+      return true;
+    } catch (e) { return false; }
   }
 
   function penSvg() {
@@ -2711,11 +2730,12 @@ const PLANT_PIXELS = [
     });
   }
 
-  // GitHub Gist sync. Progress is mirrored to one private Gist so a phone and
-  // a laptop stay in step. Each side keeps the last copy both agreed on
-  // (base) and merges field by field: whatever changed here since the base
-  // wins over the remote, everything else takes the remote. So a tick on one
-  // device and an untick on another both survive. The timer stays per device.
+  // GitHub Gist sync. Progress and whiteboards are mirrored to one private
+  // Gist so a phone and a laptop stay in step. Each side keeps the last copy
+  // both agreed on (base) and merges field by field: whatever changed here
+  // since the base wins over the remote, everything else takes the remote.
+  // A tick on one device and an untick on another both survive. The timer
+  // stays per device. Layout stays per device.
   const SYNC_KEY = "gsoc-study-sync";
   const GIST_FILE = "plan-desk.json";
   const GIST_DESC = "GSoC plan desk sync";
@@ -2808,15 +2828,98 @@ const PLANT_PIXELS = [
     return res.json();
   }
 
-  async function findOrMakeGist() {
-    const list = await gh("/gists?per_page=100");
-    const found = list.find((g) => g.description === GIST_DESC && g.files && g.files[GIST_FILE]);
-    if (found) return found.id;
-    const made = await gh("/gists", {
-      method: "POST",
-      body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(syncable(state)) } } })
-    });
-    return made.id;
+  function baseStudy(base) {
+    if (!base || typeof base !== "object") return {};
+    if (base.study && typeof base.study === "object") return base.study;
+    if (base.done || base.dayNotes || base.stickies || base.logs) return base;
+    return {};
+  }
+
+  function mergeBoardList(local, remote, base) {
+    const L = new Map((local || []).map((board) => [board.id, board]));
+    const R = new Map((remote || []).map((board) => [board.id, board]));
+    const B = new Map((base || []).map((board) => [board.id, board]));
+    const out = [];
+    for (const id of new Set([...L.keys(), ...R.keys(), ...B.keys()])) {
+      const l = L.get(id);
+      const r = R.get(id);
+      const b = B.get(id);
+      if (same(l, b) && same(r, b)) { if (l) out.push(l); continue; }
+      if (same(l, b)) { if (r) out.push(r); continue; }
+      if (same(r, b)) { if (l) out.push(l); continue; }
+      if (!b && l && r) {
+        const strokes = [];
+        const seen = new Set();
+        for (const stroke of [...r.strokes, ...l.strokes]) {
+          const key = JSON.stringify(stroke);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          strokes.push(stroke);
+        }
+        const newer = (r.updatedAt || 0) >= (l.updatedAt || 0) ? r : l;
+        out.push({ ...newer, strokes: strokes.slice(-STROKE_LIMIT), updatedAt: Math.max(l.updatedAt || 0, r.updatedAt || 0) });
+        continue;
+      }
+      const pick = l && r ? ((r.updatedAt || 0) >= (l.updatedAt || 0) ? r : l) : (l || r);
+      if (pick) out.push(pick);
+    }
+    return out.slice(0, BOARD_LIMIT);
+  }
+
+  function mergeBoardDoc(local, remote, base) {
+    if (!remote) return local || null;
+    if (!local) return remote;
+    const boards = mergeBoardList(local.boards, remote.boards, base && base.boards);
+    if (!boards.length) return local;
+    const preferRemote = same(local, base) || (!same(remote, base) && (remote.updatedAt || 0) >= (local.updatedAt || 0));
+    const shell = preferRemote ? remote : local;
+    const active = boards.some((board) => board.id === shell.active) ? shell.active : boards[0].id;
+    return { ...shell, boards, active };
+  }
+
+  function packPayload(study, board) {
+    return Object.assign({}, study, { board: board || loadBoard() });
+  }
+
+  function parsePayload(text) {
+    const data = JSON.parse(text);
+    return {
+      study: syncable(normalize(data)),
+      board: data && data.board ? boardDoc(data.board) : null
+    };
+  }
+
+  async function gistText(gist) {
+    const file = gist.files && gist.files[GIST_FILE];
+    if (!file) return "";
+    if (typeof file.content === "string" && !file.truncated) return file.content;
+    if (!file.raw_url) return typeof file.content === "string" ? file.content : "";
+    const res = await fetch(file.raw_url, { headers: { Authorization: "Bearer " + syncConf.token, Accept: "application/vnd.github.raw" } });
+    if (!res.ok) throw new Error("http " + res.status);
+    return res.text();
+  }
+
+  async function readGist(id) {
+    const gist = await gh("/gists/" + id);
+    const text = await gistText(gist);
+    return { id, updated: gist.updated_at || "", payload: text ? parsePayload(text) : { study: syncable(emptyState()), board: null } };
+  }
+
+  async function listSyncGists() {
+    const found = [];
+    for (let page = 1; page <= 10; page++) {
+      const list = await gh("/gists?per_page=100&page=" + page);
+      if (!Array.isArray(list) || !list.length) break;
+      for (const gist of list) if (gist && gist.id && gist.description === GIST_DESC) found.push(gist);
+      if (list.length < 100) break;
+    }
+    return found;
+  }
+
+  async function writeGist(id, packed) {
+    const body = JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(packed) } } });
+    if (!id) return gh("/gists", { method: "POST", body });
+    return gh("/gists/" + id, { method: "PATCH", body });
   }
 
   async function syncNow() {
@@ -2827,29 +2930,58 @@ const PLANT_PIXELS = [
     syncError = "";
     paintSync();
     try {
-      if (!syncConf.gistId) {
-        syncConf.gistId = await findOrMakeGist();
-        saveSync();
+      const ids = new Set(syncConf.gistId ? [syncConf.gistId] : []);
+      for (const gist of await listSyncGists()) ids.add(gist.id);
+      const copies = [];
+      for (const id of ids) {
+        try { copies.push(await readGist(id)); }
+        catch (e) { if (e.message !== "http 404") throw e; }
       }
-      const gist = await gh("/gists/" + syncConf.gistId);
-      const file = gist.files && gist.files[GIST_FILE];
-      const remote = file && file.content ? syncable(normalize(JSON.parse(file.content))) : syncable(state);
-      const local = syncable(state);
-      const merged = syncable(normalize(mergeState(local, remote, syncConf.base)));
-      if (!same(merged, local)) {
-        state = normalize(Object.assign({}, state, merged, { timer: state.timer, reminderFired: state.reminderFired }));
+      copies.sort((a, b) => (a.updated < b.updated ? -1 : 1));
+      let remoteStudy = null;
+      let remoteBoard = null;
+      for (const copy of copies) {
+        remoteStudy = remoteStudy ? syncable(normalize(mergeState(remoteStudy, copy.payload.study, null))) : copy.payload.study;
+        remoteBoard = mergeBoardDoc(remoteBoard, copy.payload.board, null);
+      }
+      const localStudy = syncable(state);
+      const localBoard = loadBoard();
+      const base = syncConf.base;
+      let mergedStudy = remoteStudy ? syncable(normalize(mergeState(localStudy, remoteStudy, baseStudy(base)))) : localStudy;
+      let mergedBoard = mergeBoardDoc(localBoard, remoteBoard, base && base.board);
+      const target = copies.length ? copies[copies.length - 1] : null;
+      if (target) {
+        const again = await readGist(target.id);
+        if (!same(again.payload.study, remoteStudy) || !same(again.payload.board, remoteBoard)) {
+          mergedStudy = syncable(normalize(mergeState(mergedStudy, again.payload.study, remoteStudy || {})));
+          mergedBoard = mergeBoardDoc(mergedBoard, again.payload.board, remoteBoard);
+          remoteStudy = again.payload.study;
+          remoteBoard = again.payload.board;
+        }
+      }
+      let stored = true;
+      if (!same(mergedStudy, syncable(state))) {
+        state = normalize(Object.assign({}, state, mergedStudy, { timer: state.timer, reminderFired: state.reminderFired }));
         applyingRemote = true;
-        save();
+        stored = save();
         applyingRemote = false;
         render({ scroll: false, keep: true });
       }
-      if (!same(merged, remote)) {
-        await gh("/gists/" + syncConf.gistId, {
-          method: "PATCH",
-          body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(merged) } } })
-        });
+      if (stored && mergedBoard && !same(mergedBoard, loadBoard())) {
+        applyingRemote = true;
+        stored = saveBoard(mergedBoard, true);
+        applyingRemote = false;
+        if (currentRoute().name === "board") render({ scroll: false, keep: true });
       }
-      syncConf.base = merged;
+      if (!stored) return;
+      const packed = packPayload(mergedStudy, mergedBoard);
+      let gistId = target ? target.id : "";
+      if (!gistId || !remoteStudy || !same(mergedStudy, remoteStudy) || !same(mergedBoard, remoteBoard)) {
+        const written = await writeGist(gistId, packed);
+        gistId = written.id || gistId;
+      }
+      syncConf.gistId = gistId;
+      syncConf.base = { study: mergedStudy, board: mergedBoard };
       syncConf.at = Date.now();
       saveSync();
     } catch (e) {
