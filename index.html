@@ -10,10 +10,13 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Today · GSoC-ready</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-title" content="GSoC-ready">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=20261026g">
+<link rel="stylesheet" href="styles.css?v=20261026l">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -51,6 +54,10 @@
         <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 3.5h11v8.25L11.75 15.5H4.5z"/><path d="M11.5 15.25V11.5h3.75M7.5 7.5h5M7.5 10h3"/></svg>
         <span>Notes</span>
       </a>
+      <a href="#/board" data-nav="board">
+        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="13" rx="2"/><path d="M7 12.5c1.2-2.4 2.2-3.6 6-5"/></svg>
+        <span>Board</span>
+      </a>
     </nav>
     <details id="rail-settings" class="rail-settings">
       <summary>
@@ -58,9 +65,9 @@
         <span>Settings</span>
       </summary>
       <div class="settings-menu">
+        <div id="sync-panel" class="sync-panel"></div>
         <button type="button" id="backup-download">Download a backup</button>
         <button type="button" id="backup-restore">Restore a backup</button>
-        <p>Moves your progress between devices.</p>
       </div>
     </details>
     <div class="rail-meta">
@@ -91,7 +98,7 @@
 </dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <noscript><p class="noscript">This study tracker needs JavaScript turned on.</p></noscript>
-<script src="plan.js?v=20261026g"></script>
-<script src="app.js?v=20261026g"></script>
+<script src="plan.js?v=20261026l"></script>
+<script src="app.js?v=20261026l"></script>
 </body>
 </html>

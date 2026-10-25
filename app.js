@@ -219,6 +219,7 @@
         saveError = false;
         setStatus("Saved on this device");
       }
+      scheduleSync();
     } catch (e) {
       try {
         localStorage.setItem(KEY, json);
@@ -970,7 +971,7 @@ const PLANT_PIXELS = [
   function currentRoute() {
     const parts = (location.hash || "").replace(/^#/, "").split("/").filter(Boolean);
     if (parts[0] === "day" && parts[1] && dayByKey.has(parts[1])) return { name: "day", key: parts[1] };
-    if (parts[0] === "plan" || parts[0] === "focus" || parts[0] === "notes") return { name: parts[0] };
+    if (parts[0] === "plan" || parts[0] === "focus" || parts[0] === "notes" || parts[0] === "board") return { name: parts[0] };
     if (parts[0] === "day") return { name: "missing" };
     return { name: "today" };
   }
@@ -2115,6 +2116,157 @@ const PLANT_PIXELS = [
     else location.hash = "#/focus";
   }
 
+  const BOARD_KEY = "gsoc-study-board";
+  const BOARD_INKS = { ink: "#2c2824", sage: "#3d6b52", seal: "#9d4a3c", gold: "#c4963a" };
+  let boardInk = "ink";
+  let boardErase = false;
+  let boardObserver = null;
+
+  function stopBoard() {
+    if (boardObserver) {
+      boardObserver.disconnect();
+      boardObserver = null;
+    }
+  }
+
+  function loadBoard() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(BOARD_KEY) || "[]");
+      if (!Array.isArray(raw)) return [];
+      return raw.filter((stroke) => stroke && Array.isArray(stroke.points) && stroke.points.length).slice(-400);
+    } catch (e) { return []; }
+  }
+
+  function saveBoard(strokes) {
+    try { localStorage.setItem(BOARD_KEY, JSON.stringify(strokes.slice(-400))); } catch (e) { /* keep the drawing for this visit */ }
+  }
+
+  function renderBoard() {
+    stopBoard();
+    const strokes = loadBoard();
+    const canvas = el("canvas", { "aria-label": "Whiteboard. Draw with a finger or the mouse." });
+    const eraser = el("button", { type: "button", class: "btn btn-ghost mini", "aria-pressed": "false" }, "Eraser");
+    const clear = el("button", { type: "button", class: "btn btn-ghost mini board-clear" }, "Clear");
+    const colors = Object.keys(BOARD_INKS).map((name) => el("button", {
+      type: "button",
+      class: "ink-dot",
+      dataset: { ink: name },
+      "aria-label": name === "ink" ? "Black" : name[0].toUpperCase() + name.slice(1),
+      "aria-pressed": String(name === boardInk && !boardErase),
+      style: "background:" + BOARD_INKS[name]
+    }));
+    const wrap = el("section", { class: "whiteboard" }, [
+      el("div", { class: "board-tools", role: "toolbar", "aria-label": "Drawing tools" }, [
+        ...colors,
+        eraser,
+        clear
+      ]),
+      canvas
+    ]);
+
+    function markTools() {
+      colors.forEach((btn) => btn.setAttribute("aria-pressed", String(!boardErase && btn.dataset.ink === boardInk)));
+      eraser.setAttribute("aria-pressed", String(boardErase));
+    }
+    colors.forEach((btn) => btn.addEventListener("click", () => {
+      boardInk = btn.dataset.ink;
+      boardErase = false;
+      markTools();
+    }));
+    eraser.addEventListener("click", () => {
+      boardErase = true;
+      markTools();
+    });
+    clear.addEventListener("click", () => {
+      if (!strokes.length) return;
+      if (!window.confirm("Clear the whiteboard on this device?")) return;
+      strokes.length = 0;
+      saveBoard(strokes);
+      paint();
+    });
+
+    let drawing = null;
+
+    function paint() {
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width;
+      const height = canvas.height;
+      const cssWidth = canvas.getBoundingClientRect().width || 1;
+      const scale = width / cssWidth;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (const stroke of strokes) {
+        ctx.beginPath();
+        ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
+        ctx.strokeStyle = BOARD_INKS[stroke.ink] || BOARD_INKS.ink;
+        ctx.lineWidth = (stroke.erase ? 22 : 2.6) * scale;
+        stroke.points.forEach((pt, index) => {
+          const x = pt[0] * width;
+          const y = pt[1] * height;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        if (stroke.points.length === 1) ctx.lineTo(stroke.points[0][0] * width + 0.01, stroke.points[0][1] * height);
+        ctx.stroke();
+      }
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2 || rect.width > 4000 || rect.height > 4000) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const nextW = Math.round(rect.width * dpr);
+      const nextH = Math.round(rect.height * dpr);
+      if (canvas.width !== nextW || canvas.height !== nextH) {
+        canvas.width = nextW;
+        canvas.height = nextH;
+      }
+      paint();
+    }
+
+    function at(event) {
+      const rect = canvas.getBoundingClientRect();
+      return [
+        Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+        Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))
+      ];
+    }
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      try { canvas.setPointerCapture(event.pointerId); } catch (e) { /* keep the stroke without capture */ }
+      drawing = { ink: boardInk, erase: boardErase, points: [at(event)] };
+      strokes.push(drawing);
+      paint();
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!drawing) return;
+      const next = at(event);
+      const last = drawing.points[drawing.points.length - 1];
+      const dx = (next[0] - last[0]) * canvas.width;
+      const dy = (next[1] - last[1]) * canvas.height;
+      if (dx * dx + dy * dy < 2) return;
+      drawing.points.push(next);
+      paint();
+    });
+    function finish() {
+      if (!drawing) return;
+      drawing = null;
+      saveBoard(strokes);
+    }
+    canvas.addEventListener("pointerup", finish);
+    canvas.addEventListener("pointercancel", finish);
+
+    boardObserver = new ResizeObserver(resize);
+    boardObserver.observe(canvas);
+    requestAnimationFrame(resize);
+    return [wrap];
+  }
+
   function renderNotes() {
     const boardKids = state.stickies.length
       ? state.stickies.map(noteCard)
@@ -2190,6 +2342,221 @@ const PLANT_PIXELS = [
     render({ scroll: false });
   }
 
+  // GitHub Gist sync. Progress is mirrored to one private Gist so a phone and
+  // a laptop stay in step. Each side keeps the last copy both agreed on
+  // (base) and merges field by field: whatever changed here since the base
+  // wins over the remote, everything else takes the remote. So a tick on one
+  // device and an untick on another both survive. The timer stays per device.
+  const SYNC_KEY = "gsoc-study-sync";
+  const GIST_FILE = "plan-desk.json";
+  const GIST_DESC = "GSoC plan desk sync";
+  let syncConf = loadSync();
+  let syncing = false;
+  let syncAgain = false;
+  let syncTimer = 0;
+  let applyingRemote = false;
+  let syncError = "";
+
+  function loadSync() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(SYNC_KEY) || "null");
+      if (raw && typeof raw.token === "string" && raw.token) {
+        return {
+          token: raw.token,
+          gistId: typeof raw.gistId === "string" ? raw.gistId : "",
+          base: raw.base && typeof raw.base === "object" ? raw.base : null,
+          at: typeof raw.at === "number" ? raw.at : 0
+        };
+      }
+    } catch (e) { /* not connected */ }
+    return null;
+  }
+
+  function saveSync() {
+    try {
+      if (syncConf) localStorage.setItem(SYNC_KEY, JSON.stringify(syncConf));
+      else localStorage.removeItem(SYNC_KEY);
+    } catch (e) { /* sync settings last for this visit */ }
+  }
+
+  function syncable(s) {
+    return {
+      done: s.done,
+      doneAt: s.doneAt,
+      dayNotes: s.dayNotes,
+      dayNoteAt: s.dayNoteAt,
+      stickies: s.stickies,
+      logs: s.logs,
+      reminders: s.reminders,
+      focusMin: s.focusMin,
+      breakMin: s.breakMin
+    };
+  }
+
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  function mergeMap(local, remote, base) {
+    const out = {};
+    for (const k of new Set([...Object.keys(local), ...Object.keys(remote)])) {
+      const value = same(local[k], base[k]) ? remote[k] : local[k];
+      if (value !== undefined) out[k] = value;
+    }
+    return out;
+  }
+
+  const byId = (list) => Object.fromEntries((list || []).map((item) => [item.id, item]));
+
+  function mergeState(local, remote, base) {
+    const b = base || {};
+    const pair = (a, at) => Object.fromEntries(Object.keys(a || {}).map((k) => [k, [a[k], (at || {})[k] || null]]));
+    const done = mergeMap(pair(local.done, local.doneAt), pair(remote.done, remote.doneAt), pair(b.done, b.doneAt));
+    const notes = mergeMap(pair(local.dayNotes, local.dayNoteAt), pair(remote.dayNotes, remote.dayNoteAt), pair(b.dayNotes, b.dayNoteAt));
+    const out = {
+      done: {}, doneAt: {}, dayNotes: {}, dayNoteAt: {},
+      stickies: Object.values(mergeMap(byId(local.stickies), byId(remote.stickies), byId(b.stickies)))
+        .sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0)),
+      logs: Object.values(mergeMap(byId(local.logs), byId(remote.logs), byId(b.logs)))
+        .sort((x, y) => x.at - y.at),
+      reminders: Object.values(mergeMap(byId(local.reminders), byId(remote.reminders), byId(b.reminders))).slice(0, 5),
+      focusMin: same(local.focusMin, b.focusMin) ? remote.focusMin : local.focusMin,
+      breakMin: same(local.breakMin, b.breakMin) ? remote.breakMin : local.breakMin
+    };
+    for (const [k, [v, at]] of Object.entries(done)) { out.done[k] = v; if (at) out.doneAt[k] = at; }
+    for (const [k, [v, at]] of Object.entries(notes)) { out.dayNotes[k] = v; if (at) out.dayNoteAt[k] = at; }
+    return out;
+  }
+
+  async function gh(path, opts) {
+    const res = await fetch("https://api.github.com" + path, Object.assign({}, opts, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: "Bearer " + syncConf.token,
+        "Content-Type": "application/json"
+      }
+    }));
+    if (res.status === 401) throw new Error("token");
+    if (!res.ok) throw new Error("http " + res.status);
+    return res.json();
+  }
+
+  async function findOrMakeGist() {
+    const list = await gh("/gists?per_page=100");
+    const found = list.find((g) => g.description === GIST_DESC && g.files && g.files[GIST_FILE]);
+    if (found) return found.id;
+    const made = await gh("/gists", {
+      method: "POST",
+      body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(syncable(state)) } } })
+    });
+    return made.id;
+  }
+
+  async function syncNow() {
+    if (!syncConf) return;
+    if (syncing) { syncAgain = true; return; }
+    if (!navigator.onLine) { syncError = "Offline. Will sync when you're back online."; paintSync(); return; }
+    syncing = true;
+    syncError = "";
+    paintSync();
+    try {
+      if (!syncConf.gistId) {
+        syncConf.gistId = await findOrMakeGist();
+        saveSync();
+      }
+      const gist = await gh("/gists/" + syncConf.gistId);
+      const file = gist.files && gist.files[GIST_FILE];
+      const remote = file && file.content ? syncable(normalize(JSON.parse(file.content))) : syncable(state);
+      const local = syncable(state);
+      const merged = syncable(normalize(mergeState(local, remote, syncConf.base)));
+      if (!same(merged, local)) {
+        state = normalize(Object.assign({}, state, merged, { timer: state.timer, reminderFired: state.reminderFired }));
+        applyingRemote = true;
+        save();
+        applyingRemote = false;
+        render({ scroll: false, keep: true });
+      }
+      if (!same(merged, remote)) {
+        await gh("/gists/" + syncConf.gistId, {
+          method: "PATCH",
+          body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(merged) } } })
+        });
+      }
+      syncConf.base = merged;
+      syncConf.at = Date.now();
+      saveSync();
+    } catch (e) {
+      if (e.message === "token") syncError = "GitHub didn't accept the token. Connect again with a token that has the gist scope.";
+      else if (e.message === "http 404") { syncConf.gistId = ""; saveSync(); syncError = "The sync Gist was missing. It will be recreated on the next sync."; }
+      else syncError = "Couldn't reach GitHub. Will try again.";
+    } finally {
+      syncing = false;
+      paintSync();
+      if (syncAgain) { syncAgain = false; scheduleSync(0); }
+    }
+  }
+
+  function scheduleSync(delay) {
+    if (!syncConf || applyingRemote) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, delay == null ? 2500 : delay);
+  }
+
+  function syncAgo() {
+    if (!syncConf || !syncConf.at) return "Not synced yet";
+    const min = Math.round((Date.now() - syncConf.at) / 60000);
+    return min < 1 ? "Synced just now" : min < 60 ? "Synced " + min + " min ago" : "Synced at " + formatStamp(syncConf.at);
+  }
+
+  function paintSync() {
+    const box = document.getElementById("sync-panel");
+    if (!box) return;
+    if (!syncConf) {
+      const input = el("input", {
+        type: "password",
+        id: "sync-token",
+        autocomplete: "off",
+        spellcheck: "false",
+        placeholder: "GitHub token",
+        "aria-label": "GitHub token with gist scope"
+      });
+      const connect = async () => {
+        const token = input.value.trim();
+        if (!token) { input.focus(); return; }
+        syncConf = { token, gistId: "", base: null, at: 0 };
+        saveSync();
+        await syncNow();
+        if (syncError && /token/.test(syncError)) { syncConf = null; saveSync(); paintSync(); toast("GitHub didn't accept that token."); }
+        else toast("Sync is on.");
+      };
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+      box.replaceChildren(
+        el("p", { class: "sync-title" }, "Sync devices"),
+        el("p", {}, ["Uses a private GitHub Gist. ", el("a", {
+          href: "https://github.com/settings/tokens/new?scopes=gist&description=Plan%20desk%20sync",
+          target: "_blank",
+          rel: "noopener"
+        }, "Make a token"), " with the gist scope, then paste it on each device."]),
+        input,
+        el("button", { type: "button", class: "sync-action", onclick: connect }, "Connect")
+      );
+      return;
+    }
+    box.replaceChildren(
+      el("p", { class: "sync-title" }, "Sync devices"),
+      el("p", { class: syncError ? "sync-error" : "" }, syncing ? "Syncing…" : syncError || syncAgo()),
+      el("button", { type: "button", class: "sync-action", disabled: syncing, onclick: () => syncNow() }, "Sync now"),
+      el("button", {
+        type: "button",
+        class: "sync-action",
+        onclick: () => {
+          if (!confirm("Stop syncing on this device? Progress stays here and in the Gist.")) return;
+          syncConf = null;
+          saveSync();
+          paintSync();
+        }
+      }, "Disconnect")
+    );
+  }
+
   function downloadBackup() {
     const blob = new Blob([JSON.stringify(Object.assign({ exportedAt: new Date().toISOString() }, state), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -2234,10 +2601,11 @@ const PLANT_PIXELS = [
   }
 
   function render(options) {
+    stopBoard();
     const opts = options || {};
     const route = currentRoute();
     const main = document.getElementById("main");
-    const titles = { today: "Today", plan: "Plan", focus: "Focus", notes: "Notes", day: "Day", missing: "Day" };
+    const titles = { today: "Today", plan: "Plan", focus: "Focus", notes: "Notes", board: "Board", day: "Day", missing: "Day" };
     document.title = titles[route.name] + " · GSoC-ready";
     let nodes = [];
     let pageClass = "";
@@ -2251,12 +2619,15 @@ const PLANT_PIXELS = [
     } else if (route.name === "notes") {
       pageClass = "notes-page";
       nodes = renderNotes();
+    } else if (route.name === "board") {
+      pageClass = "board-page";
+      nodes = renderBoard();
     } else nodes = renderMissing();
     main.className = pageClass;
     main.replaceChildren(...nodes.flat());
     fitCalWidth(main.querySelector(".desk"));
     paintOverall();
-    const navName = route.name === "focus" ? "focus" : route.name === "notes" ? "notes" : route.name === "missing" ? "" : "plan";
+    const navName = route.name === "focus" || route.name === "notes" || route.name === "board" ? route.name : route.name === "missing" ? "" : "plan";
     document.querySelectorAll(".tabs a").forEach((link) => {
       if (link.dataset.nav === navName) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
@@ -2353,8 +2724,15 @@ const PLANT_PIXELS = [
     file.click();
   });
   document.addEventListener("click", (event) => {
-    if (settings.open && !settings.contains(event.target)) settings.open = false;
+    // composedPath still holds the menu when the click redrew the sync panel.
+    if (settings.open && !event.composedPath().includes(settings)) settings.open = false;
   });
+  settings.addEventListener("toggle", () => { if (settings.open) paintSync(); });
+  paintSync();
+  // Pull on open, on return to the tab, when back online, and every two
+  // minutes while visible; push shortly after each local save.
+  window.addEventListener("online", () => scheduleSync(0));
+  setInterval(() => { if (document.visibilityState === "visible") scheduleSync(0); }, 120000);
 
   // Phone stats sheet. The live stat tiles move into the sheet while it is
   // open and go back to the pane when it closes, so nothing is duplicated.
@@ -2402,6 +2780,7 @@ const PLANT_PIXELS = [
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    scheduleSync(0);
     let fresh = null;
     try {
       const raw = localStorage.getItem(KEY);
@@ -2422,4 +2801,10 @@ const PLANT_PIXELS = [
   if (!location.hash || location.hash === "#") history.replaceState(null, "", "#/today");
   render({ scroll: false });
   tick();
+  scheduleSync(0);
+
+  // Offline use and install-to-home-screen on the published site.
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* runs fine without it */ });
+  }
 })();
