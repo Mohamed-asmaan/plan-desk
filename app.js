@@ -842,10 +842,17 @@ function pctText(done, total) {
     });
   }
 
-  function toast(message) {
+  function toast(message, undo) {
     const node = document.getElementById("toast");
     if (!node) return;
-    node.textContent = message;
+    node.replaceChildren(document.createTextNode(message));
+    if (typeof undo === "function") {
+      node.append(el("button", {
+        type: "button",
+        class: "toast-undo",
+        onclick: () => { node.hidden = true; undo(); }
+      }, "Undo"));
+    }
     node.hidden = false;
     clearTimeout(toastTimer);
     const hide = () => { toastTimer = setTimeout(() => { node.hidden = true; }, 4200); };
@@ -1650,47 +1657,114 @@ const PLANT_PIXELS = [
     const pane = () => grid.closest(".cal-pane");
     function commit() {
       const box = pane() || grid;
-      config.order = [...box.querySelectorAll(".tile")].map((node) => node.dataset.tile);
+      config.order = [...box.querySelectorAll(".tile")].filter((node) => node.dataset.tile).map((node) => node.dataset.tile);
       saveTiles(config);
+    }
+    function tiles() {
+      return [...grid.children].filter((node) => node.classList.contains("tile") && node !== tile);
+    }
+    function place(key) {
+      const mine = tile.getBoundingClientRect();
+      const cx = mine.left + mine.width / 2;
+      const cy = mine.top + mine.height / 2;
+      let best = null;
+      let score = Infinity;
+      for (const other of tiles()) {
+        const r = other.getBoundingClientRect();
+        const dx = r.left + r.width / 2 - cx;
+        const dy = r.top + r.height / 2 - cy;
+        const row = Math.abs(dy) < Math.max(mine.height, r.height) * 0.45;
+        let ok = false;
+        if (key === "ArrowLeft") ok = row && dx < -4;
+        else if (key === "ArrowRight") ok = row && dx > 4;
+        else if (key === "ArrowUp") ok = dy < -4;
+        else if (key === "ArrowDown") ok = dy > 4;
+        if (!ok) continue;
+        const dist = (key === "ArrowUp" || key === "ArrowDown") ? dy * dy + dx * dx * 0.15 : dx * dx + dy * dy;
+        if (dist < score) { best = other; score = dist; }
+      }
+      if (!best) {
+        const all = [...grid.querySelectorAll(":scope > .tile")];
+        const index = all.indexOf(tile);
+        if ((key === "ArrowLeft" || key === "ArrowUp") && index > 0) best = all[index - 1];
+        if ((key === "ArrowRight" || key === "ArrowDown") && index >= 0 && index < all.length - 1) best = all[index + 1];
+      }
+      if (!best) return;
+      const before = key === "ArrowLeft" || key === "ArrowUp";
+      grid.insertBefore(tile, before ? best : best.nextSibling);
+      commit();
+      grip.focus();
     }
     grip.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
-      try { grip.setPointerCapture(event.pointerId); } catch (e) { /* fall back to plain pointer events */ }
+      const origin = tile.getBoundingClientRect();
+      const offsetX = event.clientX - origin.left;
+      const offsetY = event.clientY - origin.top;
+      const gap = document.createElement("div");
+      gap.className = "tile-gap";
+      gap.style.width = origin.width + "px";
+      gap.style.height = origin.height + "px";
+      gap.style.flex = "0 0 " + origin.width + "px";
+      grid.insertBefore(gap, tile);
+      try { grip.setPointerCapture(event.pointerId); } catch (e) { /* plain pointer events still move it */ }
       tile.classList.add("is-dragging");
+      tile.style.left = origin.left + "px";
+      tile.style.top = origin.top + "px";
+      tile.style.width = origin.width + "px";
       function move(e) {
+        tile.style.left = (e.clientX - offsetX) + "px";
+        tile.style.top = (e.clientY - offsetY) + "px";
         const box = pane();
         if (box) {
           const rect = box.getBoundingClientRect();
-          if (e.clientY < rect.top + 40) box.scrollTop -= 10;
-          else if (e.clientY > rect.bottom - 40) box.scrollTop += 10;
+          if (e.clientY < rect.top + 48) box.scrollTop -= 14;
+          else if (e.clientY > rect.bottom - 48) box.scrollTop += 14;
         }
-        const over = document.elementsFromPoint(e.clientX, e.clientY).find((node) => node.classList && node.classList.contains("tile") && node !== tile && node.parentNode === grid);
-        if (!over) return;
-        const r = over.getBoundingClientRect();
-        const mine = tile.getBoundingClientRect();
-        const sameRow = Math.abs(mine.top - r.top) < 1;
+        const hit = document.elementsFromPoint(e.clientX, e.clientY)
+          .map((node) => node.closest && node.closest(".tile"))
+          .find((node) => node && node !== tile && node.parentNode === grid);
+        if (!hit) return;
+        const r = hit.getBoundingClientRect();
+        const gapBox = gap.getBoundingClientRect();
+        const sameRow = Math.abs(gapBox.top - r.top) < Math.min(r.height, gapBox.height) * 0.5;
         const before = sameRow ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;
-        grid.insertBefore(tile, before ? over : over.nextSibling);
+        const next = before ? hit : hit.nextSibling;
+        if (next !== gap) grid.insertBefore(gap, next);
       }
       function end() {
         grip.removeEventListener("pointermove", move);
         grip.removeEventListener("pointerup", end);
         grip.removeEventListener("pointercancel", end);
         tile.classList.remove("is-dragging");
+        tile.style.left = "";
+        tile.style.top = "";
+        tile.style.width = "";
+        if (gap.isConnected) gap.replaceWith(tile);
         commit();
+        grip.focus();
       }
       grip.addEventListener("pointermove", move);
       grip.addEventListener("pointerup", end);
       grip.addEventListener("pointercancel", end);
     });
     grip.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown" && event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
       event.preventDefault();
-      if (event.key === "ArrowUp" && tile.previousElementSibling) grid.insertBefore(tile, tile.previousElementSibling);
-      if (event.key === "ArrowDown" && tile.nextElementSibling) grid.insertBefore(tile.nextElementSibling, tile);
-      commit();
-      grip.focus();
+      if (event.key === "Home") {
+        const first = grid.querySelector(":scope > .tile");
+        if (first && first !== tile) grid.insertBefore(tile, first);
+        commit();
+        grip.focus();
+        return;
+      }
+      if (event.key === "End") {
+        grid.append(tile);
+        commit();
+        grip.focus();
+        return;
+      }
+      place(event.key);
     });
   }
 
@@ -1702,7 +1776,12 @@ const PLANT_PIXELS = [
       "aria-label": def.name
     });
     if (tileEdit) {
-      const grip = el("button", { type: "button", class: "grip", "aria-label": "Move " + def.name + ". Drag, or use the arrow keys." }, el("i", { "aria-hidden": "true" }));
+      const grip = el("button", {
+        type: "button",
+        class: "grip",
+        "aria-label": "Move " + def.name,
+        "aria-keyshortcuts": "ArrowLeft ArrowRight ArrowUp ArrowDown"
+      }, el("i", { "aria-hidden": "true" }));
       bindTileMove(grip, tile, grid, config);
       const bar = [grip, el("span", { class: "tile-name" }, def.name)];
       if (def.half) {
@@ -2122,12 +2201,14 @@ const PLANT_PIXELS = [
   const BOARD_LIMIT = 8;
   const STROKE_LIMIT = 400;
   let boardObserver = null;
+  let boardShortcut = null;
 
   function stopBoard() {
     if (boardObserver) {
       boardObserver.disconnect();
       boardObserver = null;
     }
+    boardShortcut = null;
   }
 
   function boardId() {
@@ -2229,8 +2310,9 @@ const PLANT_PIXELS = [
   function renderBoard() {
     stopBoard();
     const doc = loadBoard();
-    doc.boards.forEach((board) => { board.redo = []; });
-    const canvas = el("canvas", { "aria-label": "Whiteboard. Draw with a finger or the mouse." });
+    const past = [];
+    const future = [];
+    const canvas = el("canvas", { tabindex: "0", "aria-label": "Whiteboard. Draw with a finger or the mouse. Control Z undoes, Control Y redoes." });
     const bar = el("div", { class: "board-bar", role: "tablist", "aria-label": "Boards" });
     const tools = el("div", { class: "board-tools", role: "toolbar", "aria-label": "Drawing tools" });
     const wrap = el("section", { class: "whiteboard" }, [bar, tools, canvas]);
@@ -2271,8 +2353,8 @@ const PLANT_PIXELS = [
 
     const widthInput = el("input", { type: "range", min: "1", max: "32", step: "0.5" });
     const widthLabel = el("span", { class: "pen-width-value" }, "");
-    const undoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Undo" }, "Undo");
-    const redoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Redo" }, "Redo");
+    const undoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Undo", "aria-keyshortcuts": "Control+Z" }, "Undo");
+    const redoBtn = el("button", { type: "button", class: "btn btn-ghost mini", "aria-label": "Redo", "aria-keyshortcuts": "Control+Y" }, "Redo");
     const clearBtn = el("button", { type: "button", class: "btn btn-ghost mini" }, "Clear");
     const penButtons = doc.pens.map((pen, index) => {
       const btn = el("button", {
@@ -2307,9 +2389,40 @@ const PLANT_PIXELS = [
       widthInput.value = String(toolWidth());
       widthInput.setAttribute("aria-label", doc.erase ? "Eraser width" : "Pen width");
       widthLabel.textContent = String(Math.round(toolWidth()));
-      undoBtn.disabled = !board.strokes.length;
-      redoBtn.disabled = !board.redo.length;
+      undoBtn.disabled = !past.length;
+      redoBtn.disabled = !future.length;
       canvas.style.cursor = doc.erase ? "cell" : "crosshair";
+    }
+
+    function shot() {
+      return JSON.stringify({
+        active: doc.active,
+        boards: doc.boards.map((board) => ({ id: board.id, name: board.name, strokes: board.strokes }))
+      });
+    }
+    function remember() {
+      past.push(shot());
+      if (past.length > 50) past.shift();
+      future.length = 0;
+    }
+    function applyShot(raw) {
+      const snap = JSON.parse(raw);
+      doc.boards = snap.boards;
+      doc.active = doc.boards.some((board) => board.id === snap.active) ? snap.active : doc.boards[0].id;
+      saveBoard(doc);
+      drawBar();
+      drawTools();
+      paint();
+    }
+    function undo() {
+      if (!past.length) return;
+      future.push(shot());
+      applyShot(past.pop());
+    }
+    function redo() {
+      if (!future.length) return;
+      past.push(shot());
+      applyShot(future.pop());
     }
 
     widthInput.addEventListener("input", () => {
@@ -2319,29 +2432,12 @@ const PLANT_PIXELS = [
       widthLabel.textContent = String(Math.round(next));
       saveBoard(doc);
     });
-    undoBtn.addEventListener("click", () => {
-      const board = current();
-      const stroke = board.strokes.pop();
-      if (!stroke) return;
-      board.redo.push(stroke);
-      saveBoard(doc);
-      drawTools();
-      paint();
-    });
-    redoBtn.addEventListener("click", () => {
-      const board = current();
-      const stroke = board.redo.pop();
-      if (!stroke) return;
-      board.strokes.push(stroke);
-      saveBoard(doc);
-      drawTools();
-      paint();
-    });
+    undoBtn.addEventListener("click", undo);
+    redoBtn.addEventListener("click", redo);
     clearBtn.addEventListener("click", () => {
       const board = current();
       if (!board.strokes.length) return;
-      if (!window.confirm("Clear this board on this device?")) return;
-      board.redo = board.strokes.slice();
+      remember();
       board.strokes = [];
       saveBoard(doc);
       drawTools();
@@ -2370,9 +2466,12 @@ const PLANT_PIXELS = [
           });
           name.addEventListener("change", () => {
             const next = name.value.trim().slice(0, 40);
-            board.name = next || board.name;
+            if (!next || next === board.name) { name.value = board.name; return; }
+            remember();
+            board.name = next;
             name.value = board.name;
             saveBoard(doc);
+            drawTools();
           });
           bar.append(name);
           return;
@@ -2398,7 +2497,8 @@ const PLANT_PIXELS = [
           toast("Eight boards is the limit on this device.");
           return;
         }
-        const board = { id: boardId(), name: "Board " + (doc.boards.length + 1), strokes: [], redo: [] };
+        remember();
+        const board = { id: boardId(), name: "Board " + (doc.boards.length + 1), strokes: [] };
         doc.boards.push(board);
         doc.active = board.id;
         saveBoard(doc);
@@ -2410,7 +2510,7 @@ const PLANT_PIXELS = [
       remove.addEventListener("click", () => {
         if (doc.boards.length < 2) return;
         const board = current();
-        if (!window.confirm("Delete " + board.name + " on this device?")) return;
+        remember();
         doc.boards = doc.boards.filter((item) => item.id !== board.id);
         doc.active = doc.boards[0].id;
         saveBoard(doc);
@@ -2450,7 +2550,7 @@ const PLANT_PIXELS = [
       try { canvas.setPointerCapture(event.pointerId); } catch (e) { /* keep the stroke without capture */ }
       const pen = doc.pens[doc.pen];
       const board = current();
-      board.redo = [];
+      remember();
       drawing = {
         ink: pen.ink,
         erase: doc.erase,
@@ -2481,6 +2581,46 @@ const PLANT_PIXELS = [
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", finish);
 
+    boardShortcut = (event) => {
+      if (currentRoute().name !== "board") return false;
+      const target = event.target;
+      if (target && target.closest && target.closest("input, textarea, select")) return false;
+      const key = event.key.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return true;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "y") {
+        event.preventDefault();
+        redo();
+        return true;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return false;
+      if (key >= "1" && key <= String(doc.pens.length)) {
+        doc.pen = Number(key) - 1;
+        doc.erase = false;
+        saveBoard(doc);
+        drawTools();
+        return true;
+      }
+      if (key === "e") {
+        doc.erase = !doc.erase;
+        saveBoard(doc);
+        drawTools();
+        return true;
+      }
+      if (key === "[" || key === "]") {
+        const step = key === "]" ? 1 : -1;
+        if (doc.erase) doc.eraseW = Math.min(48, Math.max(4, doc.eraseW + step));
+        else doc.pens[doc.pen].w = Math.min(32, Math.max(1, doc.pens[doc.pen].w + step));
+        saveBoard(doc);
+        drawTools();
+        return true;
+      }
+      return false;
+    };
     drawBar();
     drawTools();
     boardObserver = new ResizeObserver(resize);
@@ -2558,10 +2698,17 @@ const PLANT_PIXELS = [
   }
 
   function deleteNote(id) {
-    if (!confirm("Delete this note?")) return;
-    state.stickies = state.stickies.filter((note) => note.id !== id);
+    const index = state.stickies.findIndex((note) => note.id === id);
+    if (index < 0) return;
+    const note = state.stickies[index];
+    state.stickies.splice(index, 1);
     save();
     render({ scroll: false });
+    toast("Note deleted", () => {
+      state.stickies.splice(Math.min(index, state.stickies.length), 0, note);
+      save();
+      render({ scroll: false });
+    });
   }
 
   // GitHub Gist sync. Progress is mirrored to one private Gist so a phone and
@@ -2984,8 +3131,10 @@ const PLANT_PIXELS = [
   document.addEventListener("pointerdown", unlockAudio, { passive: true });
   document.addEventListener("keydown", (event) => {
     unlockAudio();
+    if (boardShortcut && boardShortcut(event)) return;
     if (event.altKey || event.metaKey || event.ctrlKey) return;
-    if (event.target.closest("input, textarea, .split")) return;
+    if (event.defaultPrevented) return;
+    if (event.target.closest("input, textarea, .split, .grip")) return;
     const route = currentRoute();
     if (route.name !== "today" && route.name !== "day" && route.name !== "plan") return;
     if (event.key === "ArrowLeft") { event.preventDefault(); shiftDay(-1); }
