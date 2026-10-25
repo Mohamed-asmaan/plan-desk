@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=20261026d">
+<link rel="stylesheet" href="styles.css?v=20261026g">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -21,6 +21,15 @@
   <header class="rail">
     <div class="rail-top">
       <div class="rail-title">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
+            <rect class="brand-star" x="4.1" y="4.1" width="17.8" height="17.8"/>
+            <path class="brand-star" d="M13 .4 25.6 13 13 25.6.4 13z"/>
+            <circle class="brand-core" cx="13" cy="13" r="7.3"/>
+            <path class="brand-glyph" d="M10.5 10.9 8.6 13l1.9 2.1M15.5 10.9l1.9 2.1-1.9 2.1M10.2 13h5.6"/>
+          </svg>
+          <span class="brand-name"><span>Google</span>Summer of Code</span>
+        </div>
         <h1><span class="eyebrow">Two months to</span>GSoC-ready</h1>
         <p id="rail-day" class="rail-day"></p>
       </div>
@@ -55,6 +64,11 @@
       </div>
     </details>
     <div class="rail-meta">
+      <button id="stats-open" class="stats-open" type="button" aria-haspopup="dialog" aria-controls="stats-sheet">
+        <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16.25V11M10 16.25V4.75M16 16.25V8"/></svg>
+        <span id="stats-open-pct">0%</span>
+        <span class="sr">Progress</span>
+      </button>
       <div id="plant" class="plant" aria-hidden="true"></div>
       <button id="timer-chip" class="timer-chip" type="button" hidden>Timer</button>
       <div class="rail-when">
@@ -68,9 +82,16 @@
     <p id="save-status" class="save-status">Saved on this device</p>
   </div>
 </div>
+<dialog id="stats-sheet" class="sheet" aria-labelledby="stats-sheet-title">
+  <div class="sheet-head">
+    <h2 id="stats-sheet-title">Progress</h2>
+    <button type="button" class="btn btn-ghost mini" id="stats-close">Done</button>
+  </div>
+  <div class="sheet-body" id="stats-sheet-body"></div>
+</dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <noscript><p class="noscript">This study tracker needs JavaScript turned on.</p></noscript>
-<script src="plan.js?v=20261026d"></script>
-<script src="app.js?v=20261026d"></script>
+<script src="plan.js?v=20261026g"></script>
+<script src="app.js?v=20261026g"></script>
 </body>
 </html>
