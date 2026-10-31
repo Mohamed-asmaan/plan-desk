@@ -128,12 +128,67 @@ export function dayTasks(day) {
   return day.blocks.flatMap((block) => block.tasks);
 }
 
-export function dayMinutes(day) {
-  return dayTasks(day).reduce((sum, task) => sum + (task.min || 0), 0);
+/* A task change lives in state.tasks, not in plan.js: edited wording, a move
+   onto another day, a skip, or a task you added. */
+function taskPatch(state, id) {
+  const all = state && state.tasks;
+  const patch = all && all[id];
+  return patch && typeof patch === "object" ? patch : null;
+}
+
+export function blocksForDay(state, day) {
+  const groups = new Map();
+  const order = day.blocks.map((block) => block.name);
+  function push(name, task, hack) {
+    if (!groups.has(name)) {
+      groups.set(name, { name, hack: !!hack, tasks: [] });
+      if (!order.includes(name)) order.push(name);
+    }
+    groups.get(name).tasks.push(task);
+  }
+  for (const block of day.blocks) {
+    for (const task of block.tasks) {
+      const patch = taskPatch(state, task.id);
+      if (patch && (patch.skip || (patch.day && patch.day !== day.key))) continue;
+      push(block.name, { ...task, text: patch && patch.text ? patch.text : task.text, baseText: task.text }, block.hack);
+    }
+  }
+  for (const [id, patch] of Object.entries((state && state.tasks) || {})) {
+    if (!patch || patch.skip || patch.day !== day.key) continue;
+    if (taskInfo.has(id)) {
+      const info = taskInfo.get(id);
+      if (info.day.key === day.key) continue;
+      push(info.block.name, { ...info.task, text: patch.text || info.task.text, baseText: info.task.text }, info.block.hack);
+    } else if (patch.added && patch.text) {
+      push("Yours", { id, text: patch.text, baseText: "", min: 0, how: "", res: [], must: false, added: true }, false);
+    }
+  }
+  return order.filter((name) => groups.has(name)).map((name) => groups.get(name));
+}
+
+export function tasksForDay(state, day) {
+  return blocksForDay(state, day).flatMap((block) => block.tasks);
+}
+
+export function taskView(state, id) {
+  const info = taskInfo.get(id);
+  const patch = taskPatch(state, id);
+  if (patch && patch.added) {
+    const day = dayByKey.get(patch.day);
+    if (!day || patch.skip) return null;
+    return { day, task: { id, text: patch.text || "Task" } };
+  }
+  if (!info) return null;
+  const day = patch && patch.day && dayByKey.has(patch.day) ? dayByKey.get(patch.day) : info.day;
+  return { day, task: { ...info.task, text: patch && patch.text ? patch.text : info.task.text } };
+}
+
+export function dayMinutes(state, day) {
+  return tasksForDay(state, day).reduce((sum, task) => sum + (task.min || 0), 0);
 }
 
 export function dayStats(state, day) {
-  const tasks = dayTasks(day);
+  const tasks = tasksForDay(state, day);
   return { done: tasks.filter((task) => state.done[task.id]).length, total: tasks.length };
 }
 
@@ -147,16 +202,18 @@ export function level(done, total) {
 }
 
 export function mustsDone(state, day) {
-  const musts = dayTasks(day).filter((task) => task.must);
+  const musts = tasksForDay(state, day).filter((task) => task.must);
   return musts.length > 0 && musts.every((task) => state.done[task.id]);
 }
 
 export function overall(state) {
   let done = 0;
   let total = 0;
-  for (const info of taskInfo.values()) {
-    total += 1;
-    if (state.done[info.task.id]) done += 1;
+  for (const day of days) {
+    for (const task of tasksForDay(state, day)) {
+      total += 1;
+      if (state.done[task.id]) done += 1;
+    }
   }
   return { done, total, ratio: total ? done / total : 0 };
 }
@@ -176,7 +233,7 @@ export function catchUpDays(state) {
   const rows = [];
   for (const day of days) {
     if (day.key >= today) continue;
-    const left = dayTasks(day).filter((task) => !state.done[task.id]);
+    const left = tasksForDay(state, day).filter((task) => !state.done[task.id]);
     if (left.length) rows.push({ day, left });
   }
   return rows.reverse();
@@ -343,7 +400,7 @@ export function emptyTimer() {
 }
 
 export function emptyState() {
-  return { version: 1, done: {}, doneAt: {}, dayNotes: {}, dayNoteAt: {}, stickies: [], logs: [], reminders: [], reminderFired: {}, focusMin: 25, breakMin: 5, timer: emptyTimer() };
+  return { version: 1, done: {}, doneAt: {}, dayNotes: {}, dayNoteAt: {}, tasks: {}, stickies: [], logs: [], reminders: [], reminderFired: {}, focusMin: 25, breakMin: 5, timer: emptyTimer() };
 }
 
 function clampInt(value, min, max, fallback) {
@@ -424,6 +481,22 @@ export function normalize(raw) {
       const minute = clampInt(rem.minute, 0, 59, -1);
       if (hour < 0 || minute < 0) continue;
       base.reminders.push({ id: rem.id.slice(0, 40), hour, minute, label: typeof rem.label === "string" && rem.label.trim() ? rem.label.trim().slice(0, 80) : "Reminder" });
+    }
+  }
+  if (raw.tasks && typeof raw.tasks === "object") {
+    let added = 0;
+    for (const [id, patch] of Object.entries(raw.tasks)) {
+      if (!patch || typeof patch !== "object" || typeof id !== "string" || !id || id.length > 40) continue;
+      const next = { at: typeof patch.at === "number" && patch.at > 0 ? patch.at : 0 };
+      if (typeof patch.text === "string" && patch.text.trim()) next.text = patch.text.trim().slice(0, 240);
+      if (typeof patch.day === "string" && dayByKey.has(patch.day)) next.day = patch.day;
+      if (patch.skip === true) next.skip = true;
+      if (patch.added === true) {
+        if (added >= 40 || !next.text || !next.day) continue;
+        next.added = true;
+        added += 1;
+      }
+      if (next.text || next.day || next.skip) base.tasks[id] = next;
     }
   }
   if (raw.reminderFired && typeof raw.reminderFired === "object") {

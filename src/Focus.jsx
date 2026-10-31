@@ -1,4 +1,4 @@
-import { MONTHS_SHORT, WEEKDAYS, cappedElapsed, formatMs, fmtDur, hashForDay, pad, sessionActive, taskInfo, taskLoggedMs } from "./model.js";
+import { MONTHS_SHORT, WEEKDAYS, cappedElapsed, formatMs, fmtDur, hashForDay, pad, sessionActive, taskLoggedMs, taskView } from "./model.js";
 import { MAX_REMINDERS, addReminder, removeReminder, setReminderLabel, setReminderTime } from "./reminders.js";
 import {
   displayMs, pauseTimer, phaseLabel, resumeTimer, setBreakMin, setFocusMin, setMode,
@@ -134,7 +134,7 @@ export default function Focus({ state, update }) {
   const timer = state.timer;
   useNow(250, timer.running);
   const active = sessionActive(state);
-  const info = timer.taskId ? taskInfo.get(timer.taskId) : null;
+  const info = timer.taskId ? taskView(state, timer.taskId) : null;
   const run = (recipe) => update((draft) => recipe(draft));
   const logged = info ? taskLoggedMs(state, info.task.id) : 0;
 

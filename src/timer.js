@@ -192,14 +192,15 @@ export function unlinkTask(draft) {
 }
 
 /** Start focus on a plan task. The caller then navigates to #/focus. */
-export function startFromTask(draft, taskId) {
+export function startFromTask(draft, taskId, dayKey) {
   const info = taskInfo.get(taskId);
-  if (!info) return draft;
+  const day = dayKey || (info && info.day.key);
+  if (!day) return draft;
   if (sessionActive(draft)) {
     toast(draft.timer.taskId === taskId ? "That timer is already going." : "A timer is already running.");
     return draft;
   }
-  return startFocus(draft, { taskId, dayKey: info.day.key });
+  return startFocus(draft, { taskId, dayKey: day });
 }
 
 /* ---------- Ending and reconciling (pure; return what happened) ---------- */

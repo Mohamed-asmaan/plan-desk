@@ -52,7 +52,7 @@ function emit() {
 }
 
 function syncable(s) {
-  return { done: s.done, doneAt: s.doneAt, dayNotes: s.dayNotes, dayNoteAt: s.dayNoteAt, stickies: s.stickies, logs: s.logs, reminders: s.reminders, focusMin: s.focusMin, breakMin: s.breakMin };
+  return { done: s.done, doneAt: s.doneAt, dayNotes: s.dayNotes, dayNoteAt: s.dayNoteAt, tasks: s.tasks || {}, stickies: s.stickies, logs: s.logs, reminders: s.reminders, focusMin: s.focusMin, breakMin: s.breakMin };
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -78,6 +78,7 @@ export function mergeState(local, remote, base) {
     stickies: Object.values(mergeMap(byId(local.stickies), byId(remote.stickies), byId(b.stickies))).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0)),
     logs: Object.values(mergeMap(byId(local.logs), byId(remote.logs), byId(b.logs))).sort((x, y) => x.at - y.at),
     reminders: Object.values(mergeMap(byId(local.reminders), byId(remote.reminders), byId(b.reminders))).slice(0, 5),
+    tasks: mergeMap(local.tasks || {}, remote.tasks || {}, b.tasks || {}),
     focusMin: same(local.focusMin, b.focusMin) ? remote.focusMin : local.focusMin,
     breakMin: same(local.breakMin, b.breakMin) ? remote.breakMin : local.breakMin
   };

@@ -1,11 +1,12 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
-  MONTHS, clampedDay, dayByKey, dayIndex, dayMinutes, dayStats, days, fmtDur, fmtMin,
+  MONTHS, blocksForDay, clampedDay, dayByKey, dayIndex, dayMinutes, dayStats, days, fmtDur, fmtMin,
   formatHours, formatStamp, hashForDay, homeNote, level, longDate, monthCells, monthsCovered,
-  mustsDone, sessionActive, taskLoggedMs, todayFocusMs, weeks
+  mustsDone, sessionActive, shortWhen, taskInfo, taskLoggedMs, todayFocusMs, uid, weeks
 } from "./model.js";
 import { startFromTask, useNow } from "./timer.js";
 import { summaryDefs, Seal } from "./Summary.jsx";
+import { toast } from "./toast.jsx";
 
 /* The Plan screen: overview pane | divider | day board. Behaviour follows the
    design skill: one open day (raised card, sage ring on the calendar), scroll
@@ -172,7 +173,7 @@ function Plan({ state, update, today }) {
             <DayCard key={day.key} day={day} state={state} update={update} current={day.key === active} today={today} query={q} />
           ))}
         </div>
-        {q && !days.some((day) => day.blocks.some((block) => block.tasks.some((task) => taskHit(task, block, q)))) ? <p className="quiet task-miss">No matching tasks.</p> : null}
+        {q && !days.some((day) => blocksForDay(state, day).some((block) => block.tasks.some((task) => taskHit(task, block, q)))) ? <p className="quiet task-miss">No matching tasks.</p> : null}
         <Pager active={active} onStep={shiftDay} onToday={() => openDay(clampedDay().key, "smooth")} />
       </div>
     </div>
@@ -601,7 +602,7 @@ function DayCard({ day, state, update, current, today, query }) {
   const stats = dayStats(state, day);
   const note = homeNote(day);
   const pct = stats.total ? (stats.done / stats.total) * 100 : 0;
-  const planned = day.type === "hack" ? "DSA and GSoC are paused today." : fmtMin(dayMinutes(day)) + " planned.";
+  const planned = day.type === "hack" ? "DSA and GSoC are paused today." : fmtMin(dayMinutes(state, day)) + " planned.";
   const isHome = day.key === clampedDay().key;
 
   const setNote = (value) => update((draft) => {
@@ -610,10 +611,20 @@ function DayCard({ day, state, update, current, today, query }) {
     return draft;
   });
 
+  const viewed = blocksForDay(state, day);
   const blocks = query
-    ? day.blocks.map((block) => ({ ...block, tasks: block.tasks.filter((task) => taskHit(task, block, query)) })).filter((block) => block.tasks.length)
-    : day.blocks;
+    ? viewed.map((block) => ({ ...block, tasks: block.tasks.filter((task) => taskHit(task, block, query)) })).filter((block) => block.tasks.length)
+    : viewed;
   if (query && !blocks.length) return null;
+
+  function addTask() {
+    const id = uid();
+    update((draft) => {
+      if (!draft.tasks) draft.tasks = {};
+      draft.tasks[id] = { added: true, text: "New task", day: day.key, at: Date.now() };
+      return draft;
+    });
+  }
 
   return (
     <article className={"day-card" + (current ? " is-current" : "")} id={"card-" + day.key} data-key={day.key}>
@@ -638,11 +649,12 @@ function DayCard({ day, state, update, current, today, query }) {
                 <h3>{block.hack ? <i className="px-flag" aria-hidden="true" /> : null}{block.name}</h3>
                 <span className="block-time">{minutes ? fmtMin(minutes) : "All day"}</span>
               </div>
-              {block.tasks.map((task) => <Task key={task.id} task={task} state={state} update={update} />)}
+              {block.tasks.map((task) => <Task key={task.id} task={task} dayKey={day.key} state={state} update={update} />)}
             </section>
           );
         })}
       </div>
+      {query ? null : <button type="button" className="btn-line add-task" onClick={addTask}>Add task</button>}
       <section className="day-note" hidden={!!query}>
         <label htmlFor={"day-note-" + day.key}>Note for this day</label>
         <textarea
@@ -670,20 +682,63 @@ function Logged({ state, taskId }) {
   return <span className="logged" hidden={ms < 1000}>{ms >= 1000 ? fmtDur(ms) + " logged" : ""}</span>;
 }
 
-function Task({ task, state, update }) {
+function Task({ task, dayKey, state, update }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(task.added && task.text === "New task");
+  const [draft, setDraft] = useState(task.text);
+  const [moving, setMoving] = useState(false);
+  const cancelEdit = useRef(false);
   const done = !!state.done[task.id];
   const busy = sessionActive(state);
   const mine = busy && state.timer.taskId === task.id;
 
-  const toggle = (checked) => update((draft) => {
-    if (checked) { draft.done[task.id] = true; draft.doneAt[task.id] = Date.now(); }
-    else { delete draft.done[task.id]; delete draft.doneAt[task.id]; }
-    return draft;
+  const toggle = (checked) => update((next) => {
+    if (checked) { next.done[task.id] = true; next.doneAt[task.id] = Date.now(); }
+    else { delete next.done[task.id]; delete next.doneAt[task.id]; }
+    return next;
   });
 
+  function writePatch(recipe) {
+    update((next) => {
+      if (!next.tasks) next.tasks = {};
+      const current = next.tasks[task.id] ? { ...next.tasks[task.id] } : (task.added ? { added: true, day: dayKey, text: task.text } : {});
+      const patched = recipe(current);
+      if (!patched.text && !patched.day && !patched.skip && !patched.added) delete next.tasks[task.id];
+      else next.tasks[task.id] = { ...patched, at: Date.now() };
+      return next;
+    });
+  }
+
+  function commit() {
+    if (cancelEdit.current) { cancelEdit.current = false; return; }
+    const text = draft.trim().slice(0, 240);
+    setEditing(false);
+    if (!text) { setDraft(task.text); return; }
+    if (text === task.baseText) writePatch((current) => { const copy = { ...current }; delete copy.text; return copy; });
+    else writePatch((current) => ({ ...current, text }));
+  }
+
+  function moveTo(key) {
+    setMoving(false);
+    if (key === dayKey) return;
+    const home = task.added ? "" : ((taskInfo.get(task.id) && taskInfo.get(task.id).day.key) || dayKey);
+    if (!task.added && key === home) writePatch((current) => { const copy = { ...current }; delete copy.day; return copy; });
+    else writePatch((current) => ({ ...current, day: key }));
+  }
+
+  function skip() {
+    const prev = state.tasks && state.tasks[task.id] ? { ...state.tasks[task.id] } : null;
+    writePatch((current) => ({ ...current, skip: true }));
+    toast("Task skipped.", () => update((next) => {
+      if (!next.tasks) next.tasks = {};
+      if (prev) next.tasks[task.id] = prev;
+      else delete next.tasks[task.id];
+      return next;
+    }));
+  }
+
   function focus() {
-    if (!mine) update((draft) => startFromTask(draft, task.id));
+    if (!mine) update((next) => startFromTask(next, task.id, dayKey));
     if (!busy || mine) location.hash = "#/focus";
   }
 
@@ -692,13 +747,38 @@ function Task({ task, state, update }) {
       <div className="task-top">
         <input className="tick" type="checkbox" id={task.id} checked={done} onChange={(event) => toggle(event.target.checked)} />
         <div>
-          <label className="task-label" htmlFor={task.id}>
-            <span className="task-text">{task.text}</span>
-            {task.must ? <Seal /> : null}
-          </label>
+          {editing ? (
+            <input
+              className="task-edit"
+              aria-label="Task"
+              value={draft}
+              maxLength={240}
+              autoFocus
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+                if (event.key === "Escape") { cancelEdit.current = true; setDraft(task.text); setEditing(false); }
+              }}
+            />
+          ) : (
+            <label className="task-label" htmlFor={task.id}>
+              <span className="task-text">{task.text}</span>
+              {task.must ? <Seal /> : null}
+            </label>
+          )}
           <div className="subline">
             {task.min ? <span className="mins">{fmtMin(task.min)}</span> : null}
             <Logged state={state} taskId={task.id} />
+            <button type="button" className="btn-line" onClick={() => { setDraft(task.text); setEditing(true); }}>Edit</button>
+            {moving ? (
+              <select className="task-move" aria-label="Move task to" value={dayKey} onChange={(event) => moveTo(event.target.value)} onBlur={() => setMoving(false)}>
+                {days.map((item) => <option key={item.key} value={item.key}>{shortWhen(item)}</option>)}
+              </select>
+            ) : (
+              <button type="button" className="btn-line" onClick={() => setMoving(true)}>Move</button>
+            )}
+            <button type="button" className="btn-line" onClick={skip}>Skip</button>
             <button type="button" className="btn-line" aria-expanded={open} aria-controls={"more-" + task.id} onClick={() => setOpen((v) => !v)}>
               {open ? "Hide" : "Details"}
             </button>
