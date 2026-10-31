@@ -211,7 +211,7 @@ export default function App() {
           {route === "missing" && (
             <>
               <h2>That day isn't in the plan</h2>
-              <p className="quiet">The plan runs from October 26 to December 25.</p>
+              <p className="quiet">The plan runs from November 1 to December 31.</p>
               <p><a href="#/today">Back to today</a></p>
             </>
           )}
