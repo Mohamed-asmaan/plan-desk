@@ -781,6 +781,24 @@ body.is-resizing .day-card { pointer-events: none; }
 
 /* ---------- Day board ---------- */
 .day-pane { min-width: 0; }
+.task-find {
+  position: sticky;
+  top: var(--space-3);
+  z-index: 6;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  background: var(--paper);
+}
+.task-find input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  font-size: var(--text-md);
+}
+.task-miss { margin: var(--space-2) 0 var(--space-4); }
 .day-board {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--ticket-min)), 1fr));
@@ -1157,6 +1175,14 @@ textarea { min-height: 96px; resize: vertical; }
 /* Phone and tablet: one compact header row instead of the sidebar stack. */
 @media (max-width: 959px) {
   .rail {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+  }
+  .task-find { top: var(--rail-h, 0px); }
+  .rail {
     flex-wrap: nowrap;
     align-items: center;
     gap: var(--space-2);
@@ -1224,6 +1250,8 @@ textarea { min-height: 96px; resize: vertical; }
   .cell { font-size: var(--text-sm); }
 
   .day-card:not(.is-current) { display: none; }
+  .desk.is-searching .day-card { display: block; }
+  .desk.is-searching .day-pager { display: none; }
   .day-card { scroll-margin-top: var(--space-3); }
 
   .day-pager {
@@ -1376,6 +1404,7 @@ textarea { min-height: 96px; resize: vertical; }
 }
 
 @media (min-width: 960px) {
+  .task-find { top: var(--space-6); }
   .app {
     --rail-w: clamp(204px, 14vw, 232px);
     display: grid;

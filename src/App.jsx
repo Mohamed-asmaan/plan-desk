@@ -85,6 +85,7 @@ export default function App() {
   stateRef.current = state;
   const quietSave = useRef(false);
   const sheetRef = useRef(null);
+  const railRef = useRef(null);
 
   // Every change goes through update(recipe): the recipe gets a copy, edits
   // it and returns it.
@@ -131,6 +132,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const el = railRef.current;
+    if (!el) return;
+    const apply = () => document.documentElement.style.setProperty("--rail-h", el.offsetHeight + "px");
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [route, railClosed]);
+
+  useEffect(() => {
     const onHash = () => setRoute(readRoute());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -166,7 +177,7 @@ export default function App() {
   return (
     <div className={"app" + (railClosed ? " is-rail-closed" : "")}>
       <a className="skip" href="#main">Skip to content</a>
-      <header className="rail">
+      <header className="rail" ref={railRef}>
         <div className="rail-top">
           <div className="rail-title">
             <div className="brand">

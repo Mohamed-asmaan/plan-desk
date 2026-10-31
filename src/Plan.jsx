@@ -38,7 +38,13 @@ function keyFromHash() {
   return match && dayByKey.has(match[1]) ? match[1] : null;
 }
 
+function taskHit(task, block, q) {
+  return (block.name + " " + task.text + " " + (task.how || "")).toLowerCase().includes(q);
+}
+
 function Plan({ state, update, today }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
   const deskRef = useRef(null);
   const phone = usePhone();
   const [active, setActive] = useState(() => keyFromHash() || clampedDay().key);
@@ -154,15 +160,19 @@ function Plan({ state, update, today }) {
   }, [active, phone]);
 
   return (
-    <div className="desk" ref={deskRef}>
+    <div className={"desk" + (q ? " is-searching" : "")} ref={deskRef}>
       <Overview state={state} update={update} active={active} today={today} openDay={openDay} />
       <Split deskRef={deskRef} />
       <div className="day-pane">
+        <form className="task-find" role="search" onSubmit={(event) => event.preventDefault()}>
+          <input type="search" placeholder="Search tasks" aria-label="Search tasks" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </form>
         <div className="day-board">
           {days.map((day) => (
-            <DayCard key={day.key} day={day} state={state} update={update} current={day.key === active} today={today} />
+            <DayCard key={day.key} day={day} state={state} update={update} current={day.key === active} today={today} query={q} />
           ))}
         </div>
+        {q && !days.some((day) => day.blocks.some((block) => block.tasks.some((task) => taskHit(task, block, q)))) ? <p className="quiet task-miss">No matching tasks.</p> : null}
         <Pager active={active} onStep={shiftDay} onToday={() => openDay(clampedDay().key, "smooth")} />
       </div>
     </div>
@@ -586,7 +596,7 @@ function Pager({ active, onStep, onToday }) {
   );
 }
 
-function DayCard({ day, state, update, current, today }) {
+function DayCard({ day, state, update, current, today, query }) {
   const index = dayIndex.get(day.key);
   const stats = dayStats(state, day);
   const note = homeNote(day);
@@ -599,6 +609,11 @@ function DayCard({ day, state, update, current, today }) {
     else { delete draft.dayNotes[day.key]; delete draft.dayNoteAt[day.key]; }
     return draft;
   });
+
+  const blocks = query
+    ? day.blocks.map((block) => ({ ...block, tasks: block.tasks.filter((task) => taskHit(task, block, query)) })).filter((block) => block.tasks.length)
+    : day.blocks;
+  if (query && !blocks.length) return null;
 
   return (
     <article className={"day-card" + (current ? " is-current" : "")} id={"card-" + day.key} data-key={day.key}>
@@ -615,7 +630,7 @@ function DayCard({ day, state, update, current, today }) {
       </div>
       {isHome ? <TodayFocus state={state} /> : null}
       <div className="blocks">
-        {day.blocks.map((block, blockIndex) => {
+        {blocks.map((block, blockIndex) => {
           const minutes = block.tasks.reduce((sum, task) => sum + (task.min || 0), 0);
           return (
             <section className="block" key={blockIndex}>
@@ -628,7 +643,7 @@ function DayCard({ day, state, update, current, today }) {
           );
         })}
       </div>
-      <section className="day-note">
+      <section className="day-note" hidden={!!query}>
         <label htmlFor={"day-note-" + day.key}>Note for this day</label>
         <textarea
           id={"day-note-" + day.key}
